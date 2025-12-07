@@ -772,6 +772,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     app.agent = None;
                                     app.loading = false;
                                     app.error = None;
+                                    // Clear todo list file
+                                    let todo_file = std::env::current_dir()
+                                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                                        .join(".pengy_todo.json");
+                                    let _ = std::fs::remove_file(&todo_file);
                                     if !app.api_key.is_empty() {
                                         let _ = app.initialize_agent();
                                     }
@@ -843,6 +848,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         app.agent = None;
                                         app.loading = false;
                                         app.error = None;
+                                        // Clear todo list file
+                                        let todo_file = std::env::current_dir()
+                                            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                                            .join(".pengy_todo.json");
+                                        let _ = std::fs::remove_file(&todo_file);
                                         if !app.api_key.is_empty() {
                                             let _ = app.initialize_agent();
                                         }
