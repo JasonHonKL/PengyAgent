@@ -7,6 +7,7 @@ pub mod test_agent {
     use crate::tool::grep::grep::GrepTool;
     use crate::tool::todo::todo::TodoTool;
     use crate::tool::web::web::WebTool;
+    use crate::tool::summarizer::summarizer::SummarizerTool;
     use crate::tool::tool::tool::ToolCall;
 
     /// Creates a test agent with the following tools:
@@ -32,6 +33,7 @@ pub mod test_agent {
         let grep_tool = GrepTool::new();
         let todo_tool = TodoTool::new();
         let web_tool = WebTool::new();
+        let summarizer_tool = SummarizerTool::new();
 
         // Convert tools to Box<dyn ToolCall>
         let tools: Vec<Box<dyn ToolCall>> = vec![
@@ -41,6 +43,7 @@ pub mod test_agent {
             Box::new(grep_tool),
             Box::new(todo_tool),
             Box::new(web_tool),
+            Box::new(summarizer_tool),
         ];
 
         // Get current working directory for system prompt

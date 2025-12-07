@@ -9,3 +9,4 @@ pub mod docs_reader;
 pub mod vector_search;
 pub mod vision_judge;
 pub mod github_tool;
+pub mod summarizer;

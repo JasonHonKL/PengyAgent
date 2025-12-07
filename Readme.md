@@ -29,14 +29,7 @@ Make sure `~/.local/bin` is in your PATH. Add this to your `~/.zshrc` or `~/.bas
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### Option 2: Install to system bin (requires sudo)
-
-```bash
-cargo build --release
-sudo cp target/release/pengy /usr/local/bin/
-```
-
-### Option 3: Install using Cargo (if ~/.cargo/bin is in PATH)
+### Option 2: Install using Cargo (if ~/.cargo/bin is in PATH)
 
 ```bash
 cargo install --path . --bin pengy

@@ -1,7 +1,6 @@
 pub mod agent {
     use crate::model::model::model::{Model, Message, Role};
     use crate::tool::tool::tool::ToolCall;
-    use std::sync::Arc;
 
     #[derive(Clone, Debug)]
     pub enum AgentEvent {
@@ -157,14 +156,45 @@ pub mod agent {
                             
                             // Find the tool result message to show the result
                             if found_tool_call {
+                                let mut tool_name: Option<String> = None;
+                                let mut tool_result: Option<String> = None;
+                                
+                                // Find the tool call and result
                                 for msg in messages.iter().rev() {
                                     if matches!(msg.role, Role::User) && msg.content.starts_with("Tool result: ") {
                                         let result = msg.content.strip_prefix("Tool result: ").unwrap_or(&msg.content);
+                                        tool_result = Some(result.to_string());
                                         callback(AgentEvent::ToolResult { result: result.to_string() });
+                                    }
+                                    if matches!(msg.role, Role::Assistant) && msg.content.starts_with("Tool call: ") {
+                                        if let Some(tool_info) = msg.content.strip_prefix("Tool call: ") {
+                                            if let Some((name, _)) = tool_info.split_once(" with arguments: ") {
+                                                tool_name = Some(name.to_string());
+                                            } else {
+                                                tool_name = Some(tool_info.to_string());
+                                            }
+                                        }
                                         break;
                                     }
                                 }
-                                self.messages = messages;
+                                
+                                // Check if summarizer tool was called
+                                if tool_name.as_deref() == Some("summarizer") && tool_result.as_deref() == Some("SUMMARIZE_CONVERSATION") {
+                                    // Handle summarization
+                                    match self.summarize_conversation().await {
+                                        Ok(summarized_messages) => {
+                                            self.messages = summarized_messages;
+                                            callback(AgentEvent::ToolResult { result: "Conversation summarized successfully".to_string() });
+                                        }
+                                        Err(e) => {
+                                            callback(AgentEvent::Error { error: format!("Failed to summarize conversation: {}", e) });
+                                            // Continue with original messages
+                                            self.messages = messages;
+                                        }
+                                    }
+                                } else {
+                                    self.messages = messages;
+                                }
                                 break Ok(());
                             }
                             
@@ -220,6 +250,98 @@ pub mod agent {
 
         pub fn get_messages(&self) -> &Vec<Message> {
             &self.messages
+        }
+
+        async fn summarize_conversation(&self) -> Result<Vec<Message>, Box<dyn std::error::Error + Send + Sync>> {
+            // Find the last user message (excluding tool results)
+            let mut last_user_message: Option<String> = None;
+            
+            // Iterate backwards to find the last non-tool-result user message
+            for msg in self.messages.iter().rev() {
+                if matches!(msg.role, Role::User) && !msg.content.starts_with("Tool result: ") {
+                    last_user_message = Some(msg.content.clone());
+                    break;
+                }
+            }
+            
+            // Get all messages except system prompt and the last user message for summarization
+            let mut messages_to_summarize: Vec<Message> = Vec::new();
+            let mut found_last_user = false;
+            
+            // Iterate through messages and collect those to summarize
+            for msg in self.messages.iter() {
+                match &msg.role {
+                    Role::System => {
+                        // Skip system prompt - we'll add it back later
+                        continue;
+                    }
+                    Role::User => {
+                        // Skip tool result messages
+                        if msg.content.starts_with("Tool result: ") {
+                            continue;
+                        }
+                        // Check if this is the last user message - skip it as we'll add it back
+                        if !found_last_user && last_user_message.as_ref() == Some(&msg.content) {
+                            found_last_user = true;
+                            continue;
+                        }
+                        messages_to_summarize.push(msg.clone());
+                    }
+                    Role::Assistant => {
+                        // Include assistant messages in summary
+                        messages_to_summarize.push(msg.clone());
+                    }
+                }
+            }
+            
+            // If we have messages to summarize, create a summary
+            let summary = if !messages_to_summarize.is_empty() {
+                // Create summary prompt
+                let conversation_text: String = messages_to_summarize.iter()
+                    .map(|msg| {
+                        let role_str = match msg.role {
+                            Role::User => "User",
+                            Role::Assistant => "Assistant",
+                            Role::System => "System",
+                        };
+                        format!("{}: {}\n", role_str, msg.content)
+                    })
+                    .collect();
+                
+                let summary_prompt = format!(
+                    "Please provide a concise summary of the following conversation. Focus on key decisions, actions taken, and important context. Keep it brief but informative:\n\n{}",
+                    conversation_text
+                );
+                
+                // Call the model to generate summary
+                let summary_messages = vec![
+                    Message::new(Role::System, "You are a helpful assistant that summarizes conversations concisely.".to_string()),
+                    Message::new(Role::User, summary_prompt),
+                ];
+                
+                let summary_response = self.model.complete(summary_messages, None).await?;
+                
+                // Extract summary from response
+                summary_response.iter()
+                    .find(|msg| matches!(msg.role, Role::Assistant))
+                    .map(|msg| msg.content.clone())
+                    .unwrap_or_else(|| "Summary: Previous conversation context".to_string())
+            } else {
+                "Summary: Previous conversation context".to_string()
+            };
+            
+            // Build new messages: system prompt, {assistant, summarize}, {user, last message}
+            let mut new_messages = Vec::new();
+            new_messages.push(Message::new(Role::System, self.system_prompt.clone()));
+            // Assistant message with the summary
+            new_messages.push(Message::new(Role::Assistant, summary));
+            
+            // User message with the last message
+            if let Some(last_msg) = last_user_message {
+                new_messages.push(Message::new(Role::User, last_msg));
+            }
+            
+            Ok(new_messages)
         }
     }
 }

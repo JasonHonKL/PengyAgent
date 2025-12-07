@@ -1,9 +1,10 @@
-use pengy_agent::model::model::model::{Model, Message, Role};
+use pengy_agent::model::model::model::Model;
 use pengy_agent::agent::agent::agent::{Agent, AgentEvent};
 use pengy_agent::agent::coder::coder::create_coder_agent;
 use pengy_agent::agent::code_researcher::code_researcher::create_code_researcher_agent;
 use pengy_agent::agent::test_agent::test_agent::create_test_agent;
 use pengy_agent::agent::pengy_agent::pengy_agent::run_pengy_agent;
+use pengy_agent::agent::control_agent::control_agent::create_control_agent;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -22,17 +23,17 @@ use crossterm::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    env,
     error::Error,
     io::stdout,
     path::PathBuf,
-    collections::HashMap,
 };
 use tokio::sync::mpsc;
 
 const VERSION: &str = "v0.1.0";
 const CONFIG_FILE: &str = ".pengy_config.json";
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 enum AppState {
     Welcome,
     Chat,
@@ -49,6 +50,7 @@ enum AgentType {
     CodeResearcher, // Code research agent
     TestAgent,      // Testing agent
     PengyAgent,     // Meta-agent (orchestrates all three)
+    ControlAgent,   // Git and GitHub control agent
 }
 
 #[derive(Clone)]
@@ -116,17 +118,56 @@ struct App {
 }
 
 impl App {
+    fn load_logo() -> String {
+        // Try executable directory first (common when installed)
+        if let Ok(mut exe) = env::current_exe() {
+            exe.pop();
+            let candidate = exe.join("logo.txt");
+            if candidate.exists() {
+                if let Ok(content) = std::fs::read_to_string(&candidate) {
+                    return content;
+                }
+            }
+        }
+
+        // Fallback: current working directory
+        let cwd_logo = PathBuf::from("logo.txt");
+        if cwd_logo.exists() {
+            if let Ok(content) = std::fs::read_to_string(&cwd_logo) {
+                return content;
+            }
+        }
+
+        // Final fallback: built-in minimal logo
+        "Pengy Agent".to_string()
+    }
+
+    fn config_path() -> PathBuf {
+        let cwd_config = PathBuf::from(CONFIG_FILE);
+        if cwd_config.exists() {
+            return cwd_config;
+        }
+
+        if let Ok(home) = env::var("HOME") {
+            let home_config = PathBuf::from(home).join(CONFIG_FILE);
+            if home_config.exists() {
+                return home_config;
+            }
+        }
+
+        // Default to current working directory if no config exists
+        cwd_config
+    }
+
     fn new() -> Result<Self, Box<dyn Error>> {
-        let logo_path = PathBuf::from("logo.txt");
-        let logo = if logo_path.exists() {
-            std::fs::read_to_string(&logo_path).unwrap_or_else(|_| "Pengy Agent".to_string())
-        } else {
-            "Pengy Agent".to_string()
-        };
+        let logo = Self::load_logo();
 
         let config = Self::load_config();
         let api_key = config.api_key;
-        let selected_model = config.selected_model;
+        let selected_model = config.selected_model.map(|mut m| {
+            m.base_url = App::normalize_base_url(&m.base_url);
+            m
+        });
 
         let mut list_state = ListState::default();
         list_state.select(Some(0));
@@ -138,6 +179,16 @@ impl App {
         agent_list_state.select(Some(0));
 
         let (tx, rx) = mpsc::unbounded_channel();
+
+        let (custom_model_name, custom_base_url) = if let Some(ref m) = selected_model {
+            if m.provider == "Custom" {
+                (m.name.clone(), m.base_url.clone())
+            } else {
+                (String::new(), "https://openrouter.ai/api/v1".to_string())
+            }
+        } else {
+            (String::new(), "https://openrouter.ai/api/v1".to_string())
+        };
 
         Ok(Self {
             state: AppState::Welcome,
@@ -160,8 +211,8 @@ impl App {
             settings_api_key: api_key,
             search_query: String::new(),
             show_command_hints: false,
-            custom_model_name: String::new(),
-            custom_base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+            custom_model_name,
+            custom_base_url,
             custom_model_field: 0,
             previous_state: None,
             rx,
@@ -170,7 +221,7 @@ impl App {
     }
 
     fn load_config() -> Config {
-        let config_path = PathBuf::from(CONFIG_FILE);
+        let config_path = Self::config_path();
         if config_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&config_path) {
                 if let Ok(config) = serde_json::from_str::<Config>(&content) {
@@ -191,7 +242,8 @@ impl App {
             selected_model: self.selected_model.clone(),
         };
         let config_json = serde_json::to_string_pretty(&config)?;
-        std::fs::write(CONFIG_FILE, config_json)?;
+        let config_path = Self::config_path();
+        std::fs::write(config_path, config_json)?;
         Ok(())
     }
 
@@ -240,7 +292,21 @@ impl App {
             ("Code Researcher", "Research codebase with vector search", AgentType::CodeResearcher),
             ("Test Agent", "Testing agent for code validation", AgentType::TestAgent),
             ("Pengy Agent", "Meta-agent (orchestrates all three agents)", AgentType::PengyAgent),
+            ("Control Agent", "Git and GitHub control agent (read diff, commit, list issues, create PR)", AgentType::ControlAgent),
         ]
+    }
+
+    fn normalize_base_url(base_url: &str) -> String {
+        let trimmed = base_url.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+        let trimmed = trimmed.trim_end_matches('/');
+        if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/completions") || trimmed.ends_with("/completion") {
+            trimmed.to_string()
+        } else {
+            format!("{}/chat/completions", trimmed)
+        }
     }
 
     fn initialize_agent(&mut self) -> Result<(), Box<dyn Error>> {
@@ -248,11 +314,15 @@ impl App {
             return Err("API key is required".into());
         }
 
-        let model_option = self.selected_model.as_ref().ok_or("Model not selected")?;
+        let model_option = self.selected_model.clone().ok_or("Model not selected")?;
+        let normalized_base_url = App::normalize_base_url(&model_option.base_url);
+        if let Some(selected) = self.selected_model.as_mut() {
+            selected.base_url = normalized_base_url.clone();
+        }
         let model = Model::new(
             model_option.name.clone(),
             self.api_key.clone(),
-            model_option.base_url.clone(),
+            normalized_base_url.clone(),
         );
 
         match self.selected_agent {
@@ -273,7 +343,7 @@ impl App {
                 let agent = create_code_researcher_agent(
                     model,
                     self.api_key.clone(),
-                    model_option.base_url.clone(),
+                    normalized_base_url.clone(),
                     Some("openai/text-embedding-3-small".to_string()),
                     None,
                     Some(3),
@@ -283,6 +353,15 @@ impl App {
             }
             AgentType::TestAgent => {
                 let agent = create_test_agent(
+                    model,
+                    None,
+                    Some(3),
+                    Some(20),
+                );
+                self.agent = Some(agent);
+            }
+            AgentType::ControlAgent => {
+                let agent = create_control_agent(
                     model,
                     None,
                     Some(3),
@@ -319,7 +398,6 @@ impl App {
         self.error = None;
 
         let tx = self.tx.clone();
-        let selected_agent = self.selected_agent;
         
         // Prepare for async execution
         let model_option = self.selected_model.clone();
@@ -332,7 +410,10 @@ impl App {
         match self.selected_agent {
             AgentType::PengyAgent => {
                 let model = self.model.clone().ok_or("Model not initialized")?;
-                let base_url = model_option.unwrap().base_url;
+                let base_url = model_option
+                    .as_ref()
+                    .map(|m| App::normalize_base_url(&m.base_url))
+                    .unwrap_or_default();
                 
                 tokio::spawn(async move {
                     let callback_tx = tx.clone();
@@ -660,10 +741,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             crossterm::event::KeyCode::Tab => app.custom_model_field = (app.custom_model_field + 1) % 2,
                             crossterm::event::KeyCode::Enter => {
                                 if !app.custom_model_name.is_empty() && !app.custom_base_url.is_empty() {
+                                    let normalized_base_url = App::normalize_base_url(&app.custom_base_url);
+                                    app.custom_base_url = normalized_base_url.clone();
                                     app.selected_model = Some(ModelOption {
                                         name: app.custom_model_name.clone(),
                                         provider: "Custom".to_string(),
-                                        base_url: app.custom_base_url.clone(),
+                                        base_url: normalized_base_url,
                                     });
                                     
                                     if app.api_key.is_empty() {
@@ -703,25 +786,53 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),     // header
+            Constraint::Min(8),        // main split
+            Constraint::Length(3),     // input
+            Constraint::Length(1),     // status bar
+        ])
+        .split(f.area());
+
+    render_header(f, app, layout[0]);
+
+    // Main area: special layout for Welcome to give logo space; others keep split view.
     match app.state {
-        AppState::Welcome => render_welcome(f, app),
-        AppState::Chat => render_chat(f, app),
-        AppState::ModelSelector => render_model_selector(f, app),
-        AppState::AgentSelector => render_agent_selector(f, app),
-        AppState::Settings => render_settings(f, app),
-        AppState::Help => render_help(f, app),
-        AppState::CustomModel => render_custom_model(f, app),
+        AppState::Welcome => {
+            let main_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .split(layout[1]);
+            render_messages(f, app, main_chunks[0]);
+            render_welcome(f, app, main_chunks[1]);
+        }
+        _ => {
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+                .split(layout[1]);
+
+            render_messages(f, app, main_chunks[0]);
+
+            match app.state {
+                AppState::ModelSelector => render_model_selector(f, app, main_chunks[1]),
+                AppState::AgentSelector => render_agent_selector(f, app, main_chunks[1]),
+                AppState::Settings => render_settings(f, app, main_chunks[1]),
+                AppState::Help => render_help(f, app, main_chunks[1]),
+                AppState::CustomModel => render_custom_model(f, app, main_chunks[1]),
+                AppState::Chat => render_chat_panel(f, app, main_chunks[1]),
+                AppState::Welcome => unreachable!(),
+            }
+        }
     }
+
+    render_input(f, app, layout[2]);
+    render_status_bar(f, app, layout[3]);
 }
 
-// Re-using existing render functions but updating render_chat for new message types
-fn render_chat(f: &mut Frame, app: &mut App) {
-    let area = f.area();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(3), Constraint::Length(1)])
-        .split(area);
-
+fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     let messages: Vec<ListItem> = app.chat_messages.iter().map(|msg| {
         match msg {
             ChatMessage::User(content) => {
@@ -795,7 +906,7 @@ fn render_chat(f: &mut Frame, app: &mut App) {
         .block(Block::default().borders(Borders::NONE))
         .highlight_symbol(">> ");
     
-    f.render_stateful_widget(messages_list, chunks[0], &mut app.list_state);
+    f.render_stateful_widget(messages_list, area, &mut app.list_state);
 
     // Scrollbar
     let scrollbar = Scrollbar::default()
@@ -804,35 +915,76 @@ fn render_chat(f: &mut Frame, app: &mut App) {
         .end_symbol(Some("↓"));
     let mut scroll_state = app.scroll_state;
     scroll_state = scroll_state.content_length(app.chat_messages.len());
-    f.render_stateful_widget(scrollbar, chunks[0], &mut scroll_state);
+    f.render_stateful_widget(scrollbar, area, &mut scroll_state);
     app.scroll_state = scroll_state;
+}
 
-    // Input
-    let input_display = format!("> {}", app.chat_input);
+fn render_header(f: &mut Frame, app: &App, area: Rect) {
+    let state = format!("{:?}", app.state);
+    let title = format!(" Pengy Agent {} │ State: {} ", VERSION, state);
+    let header = Paragraph::new(title)
+        .style(Style::default().fg(Color::Cyan).bg(Color::Black).add_modifier(Modifier::BOLD));
+    f.render_widget(header, area);
+}
+
+fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
+    let label = if app.loading { "Sending..." } else { "Message" };
+    let input_display = format!("{}: {}", label, app.chat_input);
     let input_paragraph = Paragraph::new(input_display)
-        .block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(Color::DarkGray)))
+        .block(Block::default().borders(Borders::ALL).title("Input").border_style(Style::default().fg(Color::DarkGray)))
         .style(Style::default().fg(Color::White));
-    f.render_widget(input_paragraph, chunks[1]);
+    f.render_widget(input_paragraph, area);
 
-    // Hints
     if app.show_command_hints {
-        render_command_hints(f, app, chunks[1]);
+        render_command_hints(f, app, area);
     }
 
-    // Status
-    let model_name = app.selected_model.as_ref().map(|m| m.name.clone()).unwrap_or("None".to_string());
-    let agent_name = format!("{:?}", app.selected_agent); 
-    let status_text = format!(" {} | Model: {} | Agent: {} ", VERSION, model_name, agent_name);
-    let status = Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray).bg(Color::Black));
-    f.render_widget(status, chunks[2]);
+    let cursor_x = (area.x + 2 + label.len() as u16 + 2 + app.input_cursor as u16)
+        .min(area.x + area.width.saturating_sub(1));
+    let cursor_y = area.y + 1;
+    f.set_cursor_position((cursor_x, cursor_y));
+}
+
+fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
+    let model_name = app.selected_model.as_ref().map(|m| m.name.clone()).unwrap_or_else(|| "None".to_string());
+    let agent_name = format!("{:?}", app.selected_agent);
+    let loading = if app.loading { "● Running" } else { "● Idle" };
+    let status_text = format!(" Model: {} │ Agent: {} │ {} ", model_name, agent_name, loading);
+    let status = Paragraph::new(status_text)
+        .style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+    f.render_widget(status, area);
+}
+
+fn render_chat_panel(f: &mut Frame, app: &App, area: Rect) {
+    let commands = vec![
+        "/models - Select Model",
+        "/agents - Select Agent",
+        "/settings - API Key",
+        "/help - Help",
+        "/clear - Reset conversation",
+    ];
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled("Shortcuts", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+    for c in commands {
+        lines.push(Line::from(Span::styled(c, Style::default().fg(Color::Gray))));
+    }
+
+    if app.loading {
+        lines.push(Line::from(Span::styled("Status: running...", Style::default().fg(Color::Yellow))));
+    }
+
+    let block = Block::default().borders(Borders::ALL).title("Panel");
+    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    f.render_widget(Clear, area);
+    f.render_widget(p, area);
 }
 
 // Reuse other render functions...
-fn render_welcome(f: &mut Frame, app: &App) {
-    let area = f.area();
+fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
+    f.render_widget(Clear, area);
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Min(0), Constraint::Length(3), Constraint::Length(1)])
+        .constraints([Constraint::Length(10), Constraint::Min(0)])
         .split(area);
 
     // Logo
@@ -840,28 +992,11 @@ fn render_welcome(f: &mut Frame, app: &App) {
     let logo = Paragraph::new(logo_lines).alignment(Alignment::Center);
     f.render_widget(logo, vertical[0]);
 
-    // Commands
-    let commands = vec![
-        "/models - Select Model",
-        "/agents - Select Agent", 
-        "/settings - API Key",
-        "/help - Help"
-    ];
-    let command_items: Vec<ListItem> = commands.iter().map(|c| ListItem::new(Span::raw(*c))).collect();
-    let list = List::new(command_items).block(Block::default().borders(Borders::NONE).title("Commands")).style(Style::default().fg(Color::Yellow));
-    f.render_widget(list, vertical[1]);
-
-    // Input
-    let input = Paragraph::new(format!("> {}", app.chat_input))
-        .block(Block::default().borders(Borders::TOP))
-        .style(Style::default().fg(Color::White));
-    f.render_widget(input, vertical[2]);
-
-    if app.show_command_hints { render_command_hints(f, app, vertical[2]); }
-
-    // Status
-    let status = Paragraph::new("Ready to chat. Type a message or command.").style(Style::default().fg(Color::DarkGray));
-    f.render_widget(status, vertical[3]);
+    // Hint text
+    let hint = Paragraph::new("Type /help for available commands")
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::DarkGray));
+    f.render_widget(hint, vertical[1]);
 }
 
 // Helper functions
@@ -902,11 +1037,8 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 // Missing render functions need implementation or copying back
-fn render_model_selector(f: &mut Frame, app: &mut App) {
-    // (Implementation same as before, abbreviated for now as I need to fit in write)
-    // Actually I should include full implementation to avoid breaking
-    // Recovering previous implementation for selector screens...
-    let area = f.area();
+fn render_model_selector(f: &mut Frame, app: &mut App, area: Rect) {
+    f.render_widget(Clear, area);
     let rect = centered_rect(60, 60, area);
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Select Model");
@@ -915,8 +1047,8 @@ fn render_model_selector(f: &mut Frame, app: &mut App) {
     f.render_stateful_widget(list, rect, &mut app.model_list_state);
 }
 
-fn render_agent_selector(f: &mut Frame, app: &mut App) {
-    let area = f.area();
+fn render_agent_selector(f: &mut Frame, app: &mut App, area: Rect) {
+    f.render_widget(Clear, area);
     let rect = centered_rect(60, 60, area);
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Select Agent");
@@ -925,18 +1057,24 @@ fn render_agent_selector(f: &mut Frame, app: &mut App) {
     f.render_stateful_widget(list, rect, &mut app.agent_list_state);
 }
 
-fn render_settings(f: &mut Frame, app: &mut App) {
-    let area = f.area();
+fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
+    f.render_widget(Clear, area);
     let rect = centered_rect(60, 30, area);
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Settings");
     let text = format!("API Key: {}\n(Type to edit, Enter to save)", "*".repeat(app.settings_api_key.len()));
     let p = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
     f.render_widget(p, rect);
+
+    let prefix = "API Key: ".len() as u16;
+    let cursor_x = (rect.x + 1 + prefix + app.settings_api_key.len() as u16)
+        .min(rect.x + rect.width.saturating_sub(1));
+    let cursor_y = rect.y + 1;
+    f.set_cursor_position((cursor_x, cursor_y));
 }
 
-fn render_help(f: &mut Frame, _app: &App) {
-    let area = f.area();
+fn render_help(f: &mut Frame, _app: &App, area: Rect) {
+    f.render_widget(Clear, area);
     let rect = centered_rect(60, 60, area);
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Help");
@@ -945,8 +1083,8 @@ fn render_help(f: &mut Frame, _app: &App) {
     f.render_widget(p, rect);
 }
 
-fn render_custom_model(f: &mut Frame, app: &mut App) {
-    let area = f.area();
+fn render_custom_model(f: &mut Frame, app: &mut App, area: Rect) {
+    f.render_widget(Clear, area);
     let rect = centered_rect(60, 40, area);
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Custom Model");
@@ -957,9 +1095,23 @@ fn render_custom_model(f: &mut Frame, app: &mut App) {
         String::new() 
     };
     
-    let text = format!("Name: {}\nBase URL: {}\n(Tab to switch, Enter save){}", 
-        app.custom_model_name, app.custom_base_url, err_msg);
+    let name_label = if app.custom_model_field == 0 { "> Name: " } else { "  Name: " };
+    let url_label = if app.custom_model_field == 1 { "> Base URL: " } else { "  Base URL: " };
+
+    let text = format!("{}{}\n{}{}\n(Tab to switch, Enter save){}", 
+        name_label, app.custom_model_name, url_label, app.custom_base_url, err_msg);
         
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, rect);
+
+    let (active_label, active_value, line_offset) = if app.custom_model_field == 0 {
+        (name_label, &app.custom_model_name, 1)
+    } else {
+        (url_label, &app.custom_base_url, 2)
+    };
+
+    let cursor_x = (rect.x + 1 + (active_label.len() + active_value.len()) as u16)
+        .min(rect.x + rect.width.saturating_sub(1));
+    let cursor_y = rect.y + line_offset;
+    f.set_cursor_position((cursor_x, cursor_y));
 }
