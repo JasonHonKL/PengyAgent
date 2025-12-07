@@ -17,6 +17,7 @@ use ratatui::{
     },
     Frame, Terminal,
 };
+const EMBED_LOGO: &str = include_str!("../../logo.txt");
 use serde_json;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -45,6 +46,7 @@ enum AppState {
     Help,
     CustomModel,
     AgentSelector,
+    SessionSelector,
 }
 
 #[derive(Clone, PartialEq, Debug, Copy)]
@@ -69,7 +71,6 @@ enum ChatMessage {
         status: ToolStatus,
     },
     Thinking(String),
-    Step { step: u32, max: u32 },
     Error(String),
 }
 
@@ -110,6 +111,9 @@ struct App {
     error: Option<String>,
     model_list_state: ListState,
     agent_list_state: ListState,
+    session_list_state: ListState,
+    sessions: Vec<String>,
+    current_session: usize,
     settings_api_key: String,
     settings_base_url: String,
     settings_field: usize,
@@ -128,27 +132,7 @@ struct App {
 
 impl App {
     fn load_logo() -> String {
-        // Try executable directory first (common when installed)
-        if let Ok(mut exe) = env::current_exe() {
-            exe.pop();
-            let candidate = exe.join("logo.txt");
-            if candidate.exists() {
-                if let Ok(content) = std::fs::read_to_string(&candidate) {
-                    return content;
-                }
-            }
-        }
-
-        // Fallback: current working directory
-        let cwd_logo = PathBuf::from("logo.txt");
-        if cwd_logo.exists() {
-            if let Ok(content) = std::fs::read_to_string(&cwd_logo) {
-                return content;
-            }
-        }
-
-        // Final fallback: built-in minimal logo
-        "Pengy Agent".to_string()
+        EMBED_LOGO.to_string()
     }
 
     fn config_path() -> PathBuf {
@@ -205,6 +189,12 @@ impl App {
             .map(|m| m.base_url.clone())
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
+        // Clear todo list on initialization (treat as new session)
+        let todo_file = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".pengy_todo.json");
+        let _ = std::fs::remove_file(&todo_file);
+
         Ok(Self {
             state: AppState::Welcome,
             api_key: api_key.clone(),
@@ -223,6 +213,13 @@ impl App {
             error: None,
             model_list_state,
             agent_list_state,
+        session_list_state: {
+            let mut s = ListState::default();
+            s.select(Some(0));
+            s
+        },
+        sessions: vec!["New session - default".to_string()],
+        current_session: 0,
             settings_api_key: api_key,
             settings_base_url,
             settings_field: 0,
@@ -265,6 +262,26 @@ impl App {
         let config_path = Self::config_path();
         std::fs::write(config_path, config_json)?;
         Ok(())
+    }
+
+    fn create_new_session(&mut self) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let name = format!("Session {}", ts);
+        self.sessions.push(name);
+        self.current_session = self.sessions.len().saturating_sub(1);
+        self.session_list_state.select(Some(self.current_session));
+        // Reset conversation
+        self.chat_messages.clear();
+        self.list_state.select(None);
+        self.user_scrolled = false;
+        self.agent = None;
+        self.loading = false;
+        // Clear todo list for new session
+        let todo_file = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".pengy_todo.json");
+        let _ = std::fs::remove_file(&todo_file);
     }
 
     fn get_available_models() -> Vec<ModelOption> {
@@ -500,7 +517,7 @@ impl App {
                     model,
                     None, // Use default system prompt
                     Some(3),
-                    Some(20),
+                    Some(50),
                 );
                 self.agent = Some(agent);
             }
@@ -512,7 +529,7 @@ impl App {
                     Some("openai/text-embedding-3-small".to_string()),
                     None,
                     Some(3),
-                    Some(20),
+                    Some(50),
                 );
                 self.agent = Some(agent);
             }
@@ -521,7 +538,7 @@ impl App {
                     model,
                     None,
                     Some(3),
-                    Some(20),
+                    Some(50),
                 );
                 self.agent = Some(agent);
             }
@@ -530,7 +547,7 @@ impl App {
                     model,
                     None,
                     Some(3),
-                    Some(20),
+                    Some(50),
                 );
                 self.agent = Some(agent);
             }
@@ -539,7 +556,7 @@ impl App {
                     model,
                     None,
                     Some(3),
-                    Some(20),
+                    Some(50),
                 );
                 self.agent = Some(agent);
             }
@@ -603,7 +620,7 @@ impl App {
                         Some("openai/text-embedding-3-small".to_string()),
                         user_input,
                         Some(3),
-                        Some(20),
+                        Some(50),
                         callback
                     ).await;
                 });
@@ -644,7 +661,7 @@ impl App {
             }
         }
 
-        if !self.chat_messages.is_empty() {
+        if !self.chat_messages.is_empty() && !self.user_scrolled {
             self.list_state.select(Some(self.chat_messages.len() - 1));
         }
         Ok(())
@@ -659,8 +676,8 @@ impl App {
         // Then process agent events
         while let Ok(event) = self.rx.try_recv() {
             match event {
-                AgentEvent::Step { step, max_steps } => {
-                    self.chat_messages.push(ChatMessage::Step { step, max: max_steps });
+                AgentEvent::Step { .. } => {
+                    // Hide step events (user does not want to see steps)
                 }
                 AgentEvent::ToolCall { tool_name, args } => {
                     self.chat_messages.push(ChatMessage::ToolCall {
@@ -697,56 +714,84 @@ impl App {
                     self.chat_messages.push(ChatMessage::Thinking(format!("👁 {}", status)));
                 }
             }
-            // Auto scroll only if user hasn't manually scrolled
-            if !self.user_scrolled {
-            self.list_state.select(Some(self.chat_messages.len().saturating_sub(1)));
+            // Don't auto-scroll here - let render_messages handle it
+            // This prevents resetting scroll position when processing events
         }
     }
-}
 }
 
 // Helper functions for key handling
 fn handle_welcome_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio::runtime::Runtime) -> Result<(), Box<dyn Error>> {
     match key {
         crossterm::event::KeyCode::Esc => return Err("quit".into()),
-        crossterm::event::KeyCode::Enter => {
+                            crossterm::event::KeyCode::Enter => {
             if app.chat_input.starts_with('/') {
                 let cmd = app.chat_input.clone();
-                handle_command_inline(app, &cmd, AppState::Welcome);
-            } else {
-                if app.initialize_model().is_ok() {
-                    app.state = AppState::Chat;
-                    if !app.chat_input.trim().is_empty() {
-                        rt.block_on(app.send_message())?;
-                    }
+                if cmd.starts_with("/new") {
+                    app.create_new_session();
+                    app.state = AppState::Welcome;
+                                    app.chat_input.clear();
+                                    app.input_cursor = 0;
+                    return Ok(());
                 }
-            }
-        }
-        crossterm::event::KeyCode::Char(c) => {
-            app.chat_input.insert(app.input_cursor, c);
-            app.input_cursor += 1;
-            app.show_command_hints = app.chat_input.starts_with('/');
-        }
-        crossterm::event::KeyCode::Backspace => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-                app.chat_input.remove(app.input_cursor);
-                app.show_command_hints = app.chat_input.starts_with('/');
-            }
-        }
-        crossterm::event::KeyCode::Left => if app.input_cursor > 0 { app.input_cursor -= 1; },
-        crossterm::event::KeyCode::Right => if app.input_cursor < app.chat_input.len() { app.input_cursor += 1; },
-        _ => {}
-    }
+                if cmd.starts_with("/sessions") {
+                                    app.previous_state = Some(AppState::Welcome);
+                    app.state = AppState::SessionSelector;
+                    app.session_list_state.select(Some(app.current_session.min(app.sessions.len().saturating_sub(1))));
+                                    app.chat_input.clear();
+                                    app.input_cursor = 0;
+                    return Ok(());
+                }
+                handle_command_inline(app, &cmd, AppState::Welcome);
+                                } else {
+                                    if app.initialize_model().is_ok() {
+                                        app.state = AppState::Chat;
+                                        if !app.chat_input.trim().is_empty() {
+                                            rt.block_on(app.send_message())?;
+                                        }
+                                    }
+                                }
+                            }
+                            crossterm::event::KeyCode::Char(c) => {
+                                app.chat_input.insert(app.input_cursor, c);
+                                app.input_cursor += 1;
+                                app.show_command_hints = app.chat_input.starts_with('/');
+                            }
+                            crossterm::event::KeyCode::Backspace => {
+                                if app.input_cursor > 0 {
+                                    app.input_cursor -= 1;
+                                    app.chat_input.remove(app.input_cursor);
+                                    app.show_command_hints = app.chat_input.starts_with('/');
+                                }
+                            }
+                            crossterm::event::KeyCode::Left => if app.input_cursor > 0 { app.input_cursor -= 1; },
+                            crossterm::event::KeyCode::Right => if app.input_cursor < app.chat_input.len() { app.input_cursor += 1; },
+                            _ => {}
+                        }
     Ok(())
 }
 
 fn handle_chat_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio::runtime::Runtime) -> Result<(), Box<dyn Error>> {
     match key {
         crossterm::event::KeyCode::Esc => return Err("quit".into()),
-        crossterm::event::KeyCode::Enter if !app.loading => {
-            if app.chat_input.starts_with('/') {
+                            crossterm::event::KeyCode::Enter if !app.loading => {
+                                if app.chat_input.starts_with('/') {
                 let cmd = app.chat_input.clone();
+                if cmd.starts_with("/new") {
+                    app.create_new_session();
+                    app.state = AppState::Chat;
+                    app.chat_input.clear();
+                    app.input_cursor = 0;
+                    return Ok(());
+                }
+                if cmd.starts_with("/sessions") {
+                                        app.previous_state = Some(AppState::Chat);
+                    app.state = AppState::SessionSelector;
+                    app.session_list_state.select(Some(app.current_session.min(app.sessions.len().saturating_sub(1))));
+                    app.chat_input.clear();
+                    app.input_cursor = 0;
+                    return Ok(());
+                }
                 handle_command_inline(app, &cmd, AppState::Chat);
             } else if !app.chat_input.trim().is_empty() {
                 rt.block_on(app.send_message())?;
@@ -755,17 +800,26 @@ fn handle_chat_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio::ru
         }
         crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Down | 
         crossterm::event::KeyCode::PageUp | crossterm::event::KeyCode::PageDown => {
-            app.user_scrolled = true;
+            app.user_scrolled = true;  // Mark that user is manually scrolling
             let len = app.chat_messages.len();
             if len > 0 {
-                let selected = app.list_state.selected().unwrap_or(0);
+                let selected = app.list_state.selected().unwrap_or(len.saturating_sub(1));
                 let amount = match key {
                     crossterm::event::KeyCode::PageUp | crossterm::event::KeyCode::PageDown => 10,
                     _ => 1,
                 };
                 let new_selection = match key {
-                    crossterm::event::KeyCode::Up | crossterm::event::KeyCode::PageUp => selected.saturating_sub(amount),
-                    _ => (selected + amount).min(len.saturating_sub(1)),
+                    crossterm::event::KeyCode::Up | crossterm::event::KeyCode::PageUp => {
+                        if selected == 0 {
+                            0  // Already at top
+                        } else {
+                            selected.saturating_sub(amount)
+                        }
+                    },
+                    _ => {
+                        let max_idx = len.saturating_sub(1);
+                        (selected + amount).min(max_idx)
+                    }
                 };
                 app.list_state.select(Some(new_selection));
             }
@@ -802,43 +856,43 @@ fn handle_chat_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio::ru
 fn handle_command_inline(app: &mut App, cmd: &str, previous_state: AppState) {
     if cmd.starts_with("/models") {
         app.previous_state = Some(previous_state);
-        app.state = AppState::ModelSelector;
+                                        app.state = AppState::ModelSelector;
     } else if cmd.starts_with("/agents") {
         app.previous_state = Some(previous_state);
-        app.state = AppState::AgentSelector;
+                                        app.state = AppState::AgentSelector;
     } else if cmd.starts_with("/settings") {
         app.previous_state = Some(previous_state);
-        app.state = AppState::Settings;
-        app.error = None;
-        app.settings_api_key = app.api_key.clone();
-        app.settings_base_url = app
-            .selected_model
-            .as_ref()
-            .map(|m| m.base_url.clone())
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-        app.settings_field = 0;
-        let models = App::get_available_models();
-        if let Some(selected) = &app.selected_model {
-            if let Some(idx) = models.iter().position(|m| m.name == selected.name) {
-                app.model_list_state.select(Some(idx));
-            }
-        }
+                                        app.state = AppState::Settings;
+                                        app.error = None;
+                                        app.settings_api_key = app.api_key.clone();
+                                        app.settings_base_url = app
+                                            .selected_model
+                                            .as_ref()
+                                            .map(|m| m.base_url.clone())
+                                            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+                                        app.settings_field = 0;
+                                        let models = App::get_available_models();
+                                        if let Some(selected) = &app.selected_model {
+                                            if let Some(idx) = models.iter().position(|m| m.name == selected.name) {
+                                                app.model_list_state.select(Some(idx));
+                                            }
+                                        }
     } else if cmd.starts_with("/help") {
         app.previous_state = Some(previous_state);
-        app.state = AppState::Help;
+                                        app.state = AppState::Help;
     } else if cmd.starts_with("/clear") {
-        app.chat_messages.clear();
-        app.agent = None;
-        app.loading = false;
-        app.error = None;
-        let todo_file = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join(".pengy_todo.json");
-        let _ = std::fs::remove_file(&todo_file);
-        if !app.api_key.is_empty() {
-            let _ = app.initialize_agent();
-        }
-    }
+                                        app.chat_messages.clear();
+                                        app.agent = None;
+                                        app.loading = false;
+                                        app.error = None;
+                                        let todo_file = std::env::current_dir()
+                                            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                                            .join(".pengy_todo.json");
+                                        let _ = std::fs::remove_file(&todo_file);
+                                        if !app.api_key.is_empty() {
+                                            let _ = app.initialize_agent();
+                                        }
+                                    }
                                     app.chat_input.clear();
                                     app.input_cursor = 0;
                                     app.show_command_hints = false;
@@ -880,6 +934,33 @@ fn main() -> Result<(), Box<dyn Error>> {
                             Err(e) if e.to_string() == "quit" => true,
                             _ => false,
                         }
+                    }
+                    AppState::SessionSelector => {
+                        match key.code {
+                            crossterm::event::KeyCode::Esc => {
+                                app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
+                            }
+                            crossterm::event::KeyCode::Enter => {
+                                if let Some(idx) = app.session_list_state.selected() {
+                                    if idx < app.sessions.len() {
+                                        app.current_session = idx;
+                                        app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
+                                    }
+                                }
+                            }
+                            crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Down => {
+                                let i = (app.session_list_state.selected().unwrap_or(0) + 1).min(app.sessions.len().saturating_sub(1));
+                                app.session_list_state.select(Some(i));
+                            }
+                            crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Up => {
+                                let i = app.session_list_state.selected().unwrap_or(0).saturating_sub(1);
+                                app.session_list_state.select(Some(i));
+                            }
+                            crossterm::event::KeyCode::Char('h') => {}
+                            crossterm::event::KeyCode::Char('l') => {}
+                            _ => {}
+                        }
+                        false
                     }
                     AppState::ModelSelector => {
                         match key.code {
@@ -1080,8 +1161,8 @@ fn ui(f: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),     // header
-            Constraint::Min(8),        // main split
-            Constraint::Length(2),     // input (reduced from 3)
+            Constraint::Min(0),        // main area - takes all available space
+            Constraint::Length(7),     // input (thicker for better UX)
             Constraint::Length(1),     // status bar
         ])
         .split(f.area());
@@ -1102,6 +1183,14 @@ fn ui(f: &mut Frame, app: &mut App) {
             // Chat state uses full width - no right panel
             render_messages(f, app, layout[1]);
         }
+        AppState::SessionSelector => {
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+                .split(layout[1]);
+            render_messages(f, app, main_chunks[0]);
+            render_session_selector(f, app, main_chunks[1]);
+        }
         _ => {
             let main_chunks = Layout::default()
                 .direction(Direction::Horizontal)
@@ -1116,7 +1205,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                 AppState::Settings => render_settings(f, app, main_chunks[1]),
                 AppState::Help => render_help(f, app, main_chunks[1]),
                 AppState::CustomModel => render_custom_model(f, app, main_chunks[1]),
-                AppState::Chat | AppState::Welcome => unreachable!(),
+                AppState::SessionSelector | AppState::Chat | AppState::Welcome => unreachable!(),
             }
         }
     }
@@ -1131,100 +1220,209 @@ fn parse_tool_args(args: &str) -> Option<serde_json::Value> {
 
 fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
     let parsed = parse_tool_args(args);
-    let mut lines = Vec::new();
     
-    match name {
-        "edit" => {
-            if let Some(json) = parsed {
-                if let (Some(file_path), Some(old_string), Some(new_string)) = (
-                    json.get("filePath").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    json.get("oldString").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                    json.get("newString").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                ) {
-                    lines.push(Line::from(vec![
-                        Span::styled("  File: ", Style::default().fg(Color::Cyan)),
-                        Span::styled(file_path.clone(), Style::default().fg(Color::White)),
+    // Format JSON args nicely for all tools - extract all values first to ensure ownership
+    if let Some(json) = &parsed {
+        let mut result = Vec::new();
+        match name {
+            "todo" => {
+                if let Some(action_str) = json.get("action").and_then(|v| v.as_str()) {
+                    let action = action_str.to_string();
+                    let op = json.get("operation").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let desc = json.get("task_description").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let id = json.get("task_id").and_then(|v| v.as_u64());
+                    
+                    result.push(Line::from(vec![
+                        Span::styled("  Action: ", Style::default().fg(Color::Gray)),
+                        Span::styled(action, Style::default().fg(Color::White)),
                     ]));
-                    
-                    // Show diff with red/green highlighting
-                    let old_lines: Vec<String> = old_string.lines().map(|s| s.to_string()).collect();
-                    let new_lines: Vec<String> = new_string.lines().map(|s| s.to_string()).collect();
-                    
-                    // Show removed lines in red
-                    for old_line in &old_lines {
-                        if !old_line.trim().is_empty() || old_lines.len() == 1 {
-                            lines.push(Line::from(vec![
-                                Span::styled("  - ", Style::default().fg(Color::Red)),
-                                Span::styled(old_line.clone(), Style::default().fg(Color::Red).bg(Color::Rgb(40, 20, 20))),
-                            ]));
-                        }
-                    }
-                    
-                    // Show added lines in green
-                    for new_line in &new_lines {
-                        if !new_line.trim().is_empty() || new_lines.len() == 1 {
-                            lines.push(Line::from(vec![
-                                Span::styled("  + ", Style::default().fg(Color::Green)),
-                                Span::styled(new_line.clone(), Style::default().fg(Color::Green).bg(Color::Rgb(20, 40, 20))),
-                            ]));
-                        }
-                    }
-                    
-                    // Limit the number of lines shown to avoid overwhelming the UI
-                    if lines.len() > 20 {
-                        let mut truncated = lines[..2].to_vec();
-                        truncated.push(Line::from(Span::styled(
-                            format!("  ... ({} more lines)", lines.len() - 2),
-                            Style::default().fg(Color::DarkGray)
-                        )));
-                        return truncated;
-                    }
-                    return lines;
-                }
-            }
-        }
-        "file_manager" => {
-            if let Some(json) = parsed {
-                if let Some(path) = json.get("path").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-                    lines.push(Line::from(vec![
-                        Span::styled("  Path: ", Style::default().fg(Color::Cyan)),
-                        Span::styled(path.clone(), Style::default().fg(Color::White)),
-                    ]));
-                    if let Some(kind) = json.get("kind").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-                        lines.push(Line::from(vec![
-                            Span::styled("  Kind: ", Style::default().fg(Color::Cyan)),
-                            Span::styled(kind, Style::default().fg(Color::White)),
+                    if let Some(op) = op {
+                        result.push(Line::from(vec![
+                            Span::styled("  Operation: ", Style::default().fg(Color::Gray)),
+                            Span::styled(op, Style::default().fg(Color::White)),
                         ]));
                     }
-                    return lines;
+                    if let Some(desc) = desc {
+                        let truncated = if desc.len() > 60 { format!("{}...", &desc[..60]) } else { desc };
+                        result.push(Line::from(vec![
+                            Span::styled("  Task: ", Style::default().fg(Color::Gray)),
+                            Span::styled(truncated, Style::default().fg(Color::White)),
+                        ]));
+                    }
+                    if let Some(id) = id {
+                        result.push(Line::from(vec![
+                            Span::styled("  Task ID: ", Style::default().fg(Color::Gray)),
+                            Span::styled(id.to_string(), Style::default().fg(Color::White)),
+                        ]));
+                    }
                 }
             }
-        }
-        "bash" => {
-            if let Some(json) = parsed {
-                if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()).map(|s| s.to_string()) {
-                    lines.push(Line::from(vec![
-                        Span::styled("  Command: ", Style::default().fg(Color::Cyan)),
-                        Span::styled(cmd, Style::default().fg(Color::White)),
+            "edit" => {
+                if let (Some(file_path), Some(old_string), Some(new_string)) = (
+                        json.get("filePath").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        json.get("oldString").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        json.get("newString").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    ) {
+                        result.push(Line::from(vec![
+                        Span::styled("  File: ", Style::default().fg(Color::Gray)),
+                            Span::styled(file_path.clone(), Style::default().fg(Color::White)),
+                        ]));
+                        
+                        let old_lines: Vec<String> = old_string.lines().map(|s| s.to_string()).collect();
+                        let new_lines: Vec<String> = new_string.lines().map(|s| s.to_string()).collect();
+                        
+                        result.push(Line::from(vec![Span::raw("")]));
+                        result.push(Line::from(vec![
+                            Span::styled("  Changes:", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
+                        ]));
+                        
+                        let max_lines = old_lines.len().max(new_lines.len());
+                        for idx in 0..max_lines {
+                            let old_line_owned = old_lines.get(idx).cloned().unwrap_or_else(|| "".to_string());
+                            let new_line_owned = new_lines.get(idx).cloned().unwrap_or_else(|| "".to_string());
+
+                            if old_line_owned != new_line_owned {
+                                result.push(Line::from(vec![
+                                    Span::styled("  ← ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                                    Span::styled(old_line_owned.clone(), Style::default().fg(Color::Red).bg(Color::Rgb(40, 20, 20))),
+                                ]));
+                                result.push(Line::from(vec![
+                                    Span::styled("  → ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                                    Span::styled(new_line_owned.clone(), Style::default().fg(Color::Green).bg(Color::Rgb(20, 40, 20))),
+                                ]));
+                            }
+                            
+                            if result.len() > 24 {
+                                result.push(Line::from(Span::styled(
+                                    "  ... diff truncated",
+                                    Style::default().fg(Color::DarkGray)
+                                )));
+                                break;
+                            }
+                        }
+                    }
+            }
+            "file_manager" => {
+                if let Some(path) = json.get("path").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                    result.push(Line::from(vec![
+                            Span::styled("  Path: ", Style::default().fg(Color::Gray)),
+                        Span::styled(path.clone(), Style::default().fg(Color::White)),
                     ]));
-                    return lines;
+                        if let Some(kind) = json.get("kind").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                            result.push(Line::from(vec![
+                                Span::styled("  Kind: ", Style::default().fg(Color::Gray)),
+                                Span::styled(kind, Style::default().fg(Color::White)),
+                            ]));
+                        }
+                        if let Some(start) = json.get("startLine").and_then(|v| v.as_u64()) {
+                            let end = json.get("endLine").and_then(|v| v.as_u64()).unwrap_or(start);
+                            result.push(Line::from(vec![
+                                Span::styled("  Range: ", Style::default().fg(Color::Gray)),
+                                Span::styled(format!("{}-{}", start, end), Style::default().fg(Color::White)),
+                            ]));
+                        }
+                        if let Some(overwrite) = json.get("overwrite").and_then(|v| v.as_bool()) {
+                            result.push(Line::from(vec![
+                                Span::styled("  Overwrite: ", Style::default().fg(Color::Gray)),
+                                Span::styled(format!("{}", overwrite), Style::default().fg(Color::White)),
+                            ]));
+                        }
+                        if let Some(content) = json.get("content").and_then(|v| v.as_str()) {
+                            result.push(Line::from(vec![Span::raw("")]));
+                            result.push(Line::from(vec![
+                                Span::styled("  Content:", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
+                            ]));
+                            let content_lines: Vec<&str> = content.lines().take(8).collect();
+                            for line in content_lines {
+                                result.push(Line::from(vec![
+                                    Span::styled("    ", Style::default()),
+                                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                                ]));
+                            }
+                            if content.lines().count() > 8 {
+                                result.push(Line::from(Span::styled(
+                                    "    ... (truncated)",
+                                    Style::default().fg(Color::DarkGray),
+                                )));
+                            }
+                        }
+                    } else if let Some(files) = json.get("files").and_then(|v| v.as_array()) {
+                        // files array (batch)
+                        result.push(Line::from(vec![
+                            Span::styled("  Files:", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
+                        ]));
+                        for (idx, file) in files.iter().take(5).enumerate() {
+                            let path = file.get("path").and_then(|v| v.as_str()).unwrap_or("<path>");
+                            let kind = file.get("kind").and_then(|v| v.as_str()).unwrap_or("file");
+                            result.push(Line::from(vec![
+                                Span::styled(format!("    {}. {}", idx + 1, path), Style::default().fg(Color::White)),
+                                Span::styled(format!(" ({})", kind), Style::default().fg(Color::Gray)),
+                            ]));
+                            if let Some(content) = file.get("content").and_then(|v| v.as_str()) {
+                                let sample = content.lines().next().unwrap_or("");
+                                result.push(Line::from(vec![
+                                    Span::styled("      preview: ", Style::default().fg(Color::Gray)),
+                                    Span::styled(sample.to_string(), Style::default().fg(Color::White)),
+                                ]));
+                            }
+                        }
+                        if files.len() > 5 {
+                            result.push(Line::from(Span::styled(
+                                format!("    ... {} more", files.len() - 5),
+                                Style::default().fg(Color::DarkGray),
+                            )));
+                        }
+                    }
+            }
+            "bash" => {
+                if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                        result.push(Line::from(vec![
+                            Span::styled("  Command: ", Style::default().fg(Color::Gray)),
+                            Span::styled(cmd, Style::default().fg(Color::White)),
+                        ]));
+                    }
+            }
+            "grep" => {
+                if let Some(pattern) = json.get("pattern").and_then(|v| v.as_str()) {
+                    result.push(Line::from(vec![
+                        Span::styled("  Pattern: ", Style::default().fg(Color::Gray)),
+                        Span::styled(pattern.to_string(), Style::default().fg(Color::White)),
+                    ]));
+                }
+                if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
+                    result.push(Line::from(vec![
+                        Span::styled("  Path: ", Style::default().fg(Color::Gray)),
+                        Span::styled(path.to_string(), Style::default().fg(Color::White)),
+                    ]));
+                }
+            }
+            _ => {
+                // For unknown tools, format all JSON keys nicely
+                if let Some(obj) = json.as_object() {
+                    for (key, value) in obj {
+                        let value_str = match value {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            _ => value.to_string(),
+                        };
+                        let truncated = if value_str.len() > 60 { 
+                            format!("{}...", &value_str[..60]) 
+                        } else { 
+                            value_str 
+                        };
+                        result.push(Line::from(vec![
+                            Span::styled(format!("  {}: ", key), Style::default().fg(Color::Gray)),
+                            Span::styled(truncated, Style::default().fg(Color::White)),
+                        ]));
+                    }
                 }
             }
         }
-        _ => {}
-    }
-    
-    // Fallback: show raw args (truncated)
-    let truncated_args = if args.len() > 100 {
-        format!("{}...", &args[..100])
+        result
     } else {
-        args.to_string()
-    };
-    lines.push(Line::from(vec![
-        Span::styled("  Args: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(truncated_args, Style::default().fg(Color::Gray)),
-    ]));
-    lines
+        Vec::new()
+    }
 }
 
 fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status: &ToolStatus) -> ListItem<'static> {
@@ -1238,36 +1436,31 @@ fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status
                     ToolStatus::Success => "✓",
                     ToolStatus::Error => "✗",
                 };
-    
-    let card_bg = match status {
-        ToolStatus::Running => Color::Rgb(30, 30, 20),
-        ToolStatus::Success => Color::Rgb(20, 30, 20),
-        ToolStatus::Error => Color::Rgb(30, 20, 20),
-                };
                 
+    // Neutral dark background for all cards (no green theme)
+    let card_bg = Color::Rgb(20, 20, 20);
+    
+    // Better card design with proper spacing
                 let mut lines = vec![
                     Line::from(vec![
             Span::styled(format!("{} ", icon), status_style.add_modifier(Modifier::BOLD)),
             Span::styled(format!("{}", name), status_style.add_modifier(Modifier::BOLD)),
-            Span::styled(
-                match status {
-                    ToolStatus::Running => " (running...)",
-                    ToolStatus::Success => " (success)",
-                    ToolStatus::Error => " (error)",
-                },
-                Style::default().fg(Color::DarkGray),
-            ),
-                    ]),
-                ];
-                
+        ]),
+        Line::from(vec![Span::raw("")]), // Empty line for spacing
+    ];
+    
     // Add formatted args display
-    lines.extend(format_tool_args_display(name, args));
+    let args_lines = format_tool_args_display(name, args);
+    if !args_lines.is_empty() {
+        lines.extend(args_lines);
+        lines.push(Line::from(vec![Span::raw("")])); // Spacing after args
+    }
     
     // Add result if available
                 if let Some(res) = result {
         if !res.trim().is_empty() {
                     lines.push(Line::from(vec![
-                Span::styled("  Result: ", Style::default().fg(Color::Cyan)),
+                Span::styled("Result: ", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
             ]));
             
             // For edit tool, show success message
@@ -1297,28 +1490,41 @@ fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status
         }
     }
     
-    ListItem::new(lines).style(Style::default().bg(card_bg))
+    // Create card with border-like effect using padding
+    ListItem::new(lines)
+        .style(Style::default().bg(card_bg))
 }
 
 fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     let messages: Vec<ListItem> = app.chat_messages.iter().map(|msg| {
         match msg {
             ChatMessage::User(content) => {
-                // Cleaner user message style like opencode
-                ListItem::new(Line::from(vec![
-                    Span::styled("│ ", Style::default().fg(Color::Blue)),
-                    Span::styled(content.clone(), Style::default().fg(Color::White)),
-                ]))
+                // Thicker user message with more spacing
+                let user_lines = vec![
+                    Line::from(vec![Span::raw("")]), // Top padding
+                    Line::from(vec![Span::raw("")]),
+                    Line::from(vec![
+                        Span::styled("│ ", Style::default().fg(Color::Gray)),
+                        Span::styled(content.clone(), Style::default().fg(Color::White)),
+                    ]),
+                    Line::from(vec![Span::raw("")]), // Bottom padding
+                    Line::from(vec![Span::raw("")]),
+                ];
+                ListItem::new(user_lines)
             }
             ChatMessage::Assistant(content) => {
-                // Cleaner assistant message style
+                // Thicker assistant message with more spacing
+                let mut assistant_lines = vec![Line::from(vec![Span::raw("")]), Line::from(vec![Span::raw("")])]; // Top padding
                 let content_lines: Vec<Line> = content.lines().map(|l| {
                     Line::from(vec![
                         Span::styled("  ", Style::default()),
                         Span::raw(l.to_string()),
                     ])
                 }).collect();
-                ListItem::new(content_lines)
+                assistant_lines.extend(content_lines);
+                assistant_lines.push(Line::from(vec![Span::raw("")])); // Bottom padding
+                assistant_lines.push(Line::from(vec![Span::raw("")]));
+                ListItem::new(assistant_lines)
             }
             ChatMessage::ToolCall { name, args, result, status, .. } => {
                 render_tool_call_card(name, args, result, status)
@@ -1326,16 +1532,7 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
             ChatMessage::Thinking(content) => {
                 ListItem::new(Line::from(vec![
                     Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
-                    Span::styled(content.clone(), Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
-                ]))
-            }
-            ChatMessage::Step { step, max } => {
-                let percent = (*step as f64 / *max as f64 * 100.0) as u16;
-                // Simple progress bar
-                let bars = "█".repeat((percent / 5) as usize);
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("Step {}/{}: ", step, max), Style::default().fg(Color::Cyan)),
-                    Span::styled(bars, Style::default().fg(Color::Cyan)),
+                    Span::styled(content.clone(), Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC)),
                 ]))
             }
             ChatMessage::Error(err) => {
@@ -1349,13 +1546,17 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
 
     let messages_len = messages.len();
     
-    // Ensure the selected item is within bounds and visible
-    if let Some(selected) = app.list_state.selected() {
+    // Handle scrolling: only auto-scroll if user hasn't manually scrolled
+    if !app.user_scrolled && messages_len > 0 {
+        // Auto-scroll to bottom
+        app.list_state.select(Some(messages_len.saturating_sub(1)));
+    } else if let Some(selected) = app.list_state.selected() {
+        // Ensure selected is within bounds when user is scrolling
         if selected >= messages_len && messages_len > 0 {
             app.list_state.select(Some(messages_len.saturating_sub(1)));
         }
     } else if messages_len > 0 {
-        // If nothing is selected but we have messages, select the last one
+        // If nothing selected, select last item
         app.list_state.select(Some(messages_len.saturating_sub(1)));
     }
     
@@ -1363,6 +1564,7 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
         .block(Block::default().borders(Borders::NONE))
         .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)));
     
+    // Render list - List widget automatically scrolls to show selected item
     f.render_stateful_widget(messages_list, area, &mut app.list_state);
 
     // Scrollbar - automatically syncs with list state
@@ -1371,7 +1573,8 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
         .begin_symbol(Some("↑"))
         .end_symbol(Some("↓"));
     let mut scroll_state = app.scroll_state;
-    scroll_state = scroll_state.content_length(app.chat_messages.len());
+    let selected_idx = app.list_state.selected().unwrap_or(0);
+    scroll_state = scroll_state.content_length(app.chat_messages.len()).position(selected_idx.saturating_sub(1));
     f.render_stateful_widget(scrollbar, area, &mut scroll_state);
     app.scroll_state = scroll_state;
 }
@@ -1380,44 +1583,113 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let state = format!("{:?}", app.state);
     let title = format!(" Pengy Agent {} │ State: {} ", VERSION, state);
     let header = Paragraph::new(title)
-        .style(Style::default().fg(Color::Cyan).bg(Color::Black).add_modifier(Modifier::BOLD));
+        .style(Style::default().fg(Color::White).bg(Color::Black).add_modifier(Modifier::BOLD));
     f.render_widget(header, area);
 }
 
 fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
-    // OpenCode-style input: clean prompt with ">" symbol
+    // OpenCode-style input: exactly like opencode - simple single line with wrapping
     let prompt = "> ";
-    let input_display = format!("{}{}", prompt, app.chat_input);
     
-    // Create a cleaner input area like opencode
-    let input_paragraph = Paragraph::new(input_display)
+    // Calculate available width for input text
+    let available_width = area.width.saturating_sub(prompt.len() as u16);
+    
+    // Wrap text to fit width (character-based, not word-based for code/commands)
+    let input_text = &app.chat_input;
+    let mut wrapped_lines = Vec::new();
+    let mut current_line = String::new();
+    
+    for ch in input_text.chars() {
+        if current_line.len() as u16 >= available_width {
+            wrapped_lines.push(current_line);
+            current_line = ch.to_string();
+        } else {
+            current_line.push(ch);
+        }
+    }
+    if !current_line.is_empty() || wrapped_lines.is_empty() {
+        wrapped_lines.push(current_line);
+    }
+    
+    // Render input lines
+    let mut input_content = Vec::new();
+    for (i, line) in wrapped_lines.iter().enumerate() {
+        let prefix = if i == 0 { prompt } else { "  " };
+        input_content.push(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(Color::White)),
+            Span::styled(line.clone(), Style::default().fg(Color::White)),
+        ]));
+    }
+    
+    // Render input
+    let input_paragraph = Paragraph::new(input_content)
         .style(Style::default().fg(Color::White));
     f.render_widget(input_paragraph, area);
 
-    // Show hint below input
-    let hint_text = if app.loading {
-        "working.. esc interrupt"
-    } else {
-        "enter send"
-    };
-    let hint = Paragraph::new(hint_text)
-        .style(Style::default().fg(Color::DarkGray));
-    let hint_area = Rect {
-        x: area.x,
-        y: area.y + 1,
-        width: area.width,
-        height: 1,
-    };
-    f.render_widget(hint, hint_area);
+    // Show hint on the same line as input (like opencode) - only if no text entered
+    if app.chat_input.trim().is_empty() {
+        let hint_text = if app.loading {
+            "working.. esc interrupt"
+        } else {
+            "enter send"
+        };
+        
+        // Calculate where to place hint (right side of first line)
+        let first_line_len = if !wrapped_lines.is_empty() {
+            wrapped_lines[0].len() + prompt.len()
+        } else {
+            prompt.len()
+        };
+        
+        let hint_x = (area.x + first_line_len as u16 + 2).min(area.x + area.width.saturating_sub(hint_text.len() as u16 + 1));
+        let hint = Paragraph::new(hint_text)
+            .style(Style::default().fg(Color::DarkGray));
+        let hint_area = Rect {
+            x: hint_x,
+            y: area.y,
+            width: area.width.saturating_sub((hint_x - area.x) as u16),
+            height: 1,
+        };
+        f.render_widget(hint, hint_area);
+    }
+    // Extra padding lines for thicker input area (better UX)
+    for i in 2..6 {
+        let padding_area = Rect {
+            x: area.x,
+            y: area.y + i,
+            width: area.width,
+            height: 1,
+        };
+        f.render_widget(Paragraph::new(""), padding_area);
+    }
 
     if app.show_command_hints {
         render_command_hints(f, app, area);
     }
 
-    // Cursor position after the prompt
-    let cursor_x = (area.x + prompt.len() as u16 + app.input_cursor as u16)
+    // Calculate cursor position
+    let mut char_count = 0;
+    let mut cursor_line = 0;
+    let mut cursor_col = 0;
+    
+    for (line_idx, line) in wrapped_lines.iter().enumerate() {
+        if char_count + line.len() >= app.input_cursor {
+            cursor_line = line_idx;
+            cursor_col = app.input_cursor - char_count;
+            break;
+        }
+        char_count += line.len();
+    }
+    
+    if cursor_line >= wrapped_lines.len() && !wrapped_lines.is_empty() {
+        cursor_line = wrapped_lines.len() - 1;
+        cursor_col = wrapped_lines[cursor_line].len();
+    }
+    
+    let prefix_len = if cursor_line == 0 { prompt.len() } else { 2 };
+    let cursor_x = (area.x + prefix_len as u16 + cursor_col as u16)
         .min(area.x + area.width.saturating_sub(1));
-    let cursor_y = area.y;
+    let cursor_y = area.y + cursor_line as u16;
     f.set_cursor_position((cursor_x, cursor_y));
 }
 
@@ -1460,19 +1732,59 @@ fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Clear, area);
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(10),  // Logo
+            Constraint::Length(3),   // Spacing
+            Constraint::Min(5),      // Sessions list
+            Constraint::Length(2),   // Hint text
+        ])
         .split(area);
 
     // Logo
-    let logo_lines: Vec<Line> = app.logo.lines().map(|l| Line::from(Span::styled(l, Style::default().fg(Color::Cyan)))).collect();
+    let logo_lines: Vec<Line> = app.logo.lines().map(|l| Line::from(Span::styled(l, Style::default().fg(Color::White)))).collect();
     let logo = Paragraph::new(logo_lines).alignment(Alignment::Center);
     f.render_widget(logo, vertical[0]);
+
+    // Sessions list with elegant design
+    if !app.sessions.is_empty() {
+        let session_items: Vec<ListItem> = app.sessions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let marker = if i == app.current_session {
+                    "● "
+                } else {
+                    "  "
+                };
+                let style = if i == app.current_session {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(marker, style),
+                    Span::styled(s.clone(), style),
+                ]))
+            })
+            .collect();
+        
+        let sessions_block = Block::default()
+            .borders(Borders::NONE)
+            .title(Line::from(vec![
+                Span::styled("Sessions", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ]));
+        
+        let sessions_list = List::new(session_items)
+            .block(sessions_block)
+            .style(Style::default().fg(Color::White));
+        f.render_widget(sessions_list, vertical[2]);
+    }
 
     // Hint text
     let hint = Paragraph::new("Type /help for available commands")
         .alignment(Alignment::Center)
         .style(Style::default().fg(Color::DarkGray));
-    f.render_widget(hint, vertical[1]);
+    f.render_widget(hint, vertical[3]);
 }
 
 // Helper functions
@@ -1707,6 +2019,26 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
         let cursor_y = layout[1].y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
     }
+}
+
+fn render_session_selector(f: &mut Frame, app: &mut App, area: Rect) {
+    f.render_widget(Clear, area);
+    let rect = centered_rect(60, 60, area);
+    f.render_widget(Clear, rect);
+    let block = Block::default().borders(Borders::ALL).title("Sessions (hjkl/↑↓)");
+    let items: Vec<ListItem> = app
+        .sessions
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let marker = if i == app.current_session { "●" } else { " " };
+            ListItem::new(format!("{} {}", marker, s))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(list, rect, &mut app.session_list_state);
 }
 
 fn render_help(f: &mut Frame, _app: &App, area: Rect) {

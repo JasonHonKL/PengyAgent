@@ -39,7 +39,7 @@ pub mod todo {
             operation_items.insert("type".to_string(), "string".to_string());
             parameters.insert("operation".to_string(), Parameter {
                 items: operation_items,
-                description: "The operation to perform when action is 'modify': 'tick' to mark a task as completed, 'insert' to add a new task, or 'delete' to remove a task.".to_string(),
+                description: "The operation to perform when action is 'modify': 'tick' to mark a task as completed, 'insert' to add a new task, or 'delete' to remove a task. Required when not using the 'operations' array.".to_string(),
                 enum_values: Some(vec!["tick".to_string(), "insert".to_string(), "delete".to_string()]),
             });
 
@@ -70,9 +70,19 @@ pub mod todo {
                 enum_values: None,
             });
 
+            // operations parameter (optional batch support)
+            let mut operations_items = HashMap::new();
+            operations_items.insert("type".to_string(), "array".to_string());
+            operations_items.insert("item_type".to_string(), "object".to_string());
+            parameters.insert("operations".to_string(), Parameter {
+                items: operations_items,
+                description: "Optional array of operations to apply sequentially when action is 'modify'. Each item should include 'operation' plus the fields required for that operation (task_id/task_description/position). Use this to tick/insert/delete multiple tasks in one call.".to_string(),
+                enum_values: None,
+            });
+
             let tool = Tool {
                 name: "todo".to_string(),
-                description: "Manage a todo list. Use 'read' action to view all tasks, or 'modify' action with 'tick', 'insert', or 'delete' operations to update the list.".to_string(),
+                description: "Manage a todo list. Use 'read' action to view all tasks, or 'modify' action with 'tick', 'insert', or 'delete' operations to update the list. Supports batch updates via the 'operations' array.".to_string(),
                 parameters,
                 required: vec!["action".to_string()],
             };
@@ -139,12 +149,10 @@ pub mod todo {
             Ok(result.trim().to_string())
         }
 
-        fn modify_task(&self, args: &serde_json::Value) -> Result<String, Box<dyn Error>> {
+        fn apply_operation(tasks: &mut Vec<TodoTask>, args: &serde_json::Value) -> Result<String, Box<dyn Error>> {
             let operation = args.get("operation")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: operation (required when action is 'modify')")?;
-
-            let mut state_guard = self.state.lock().unwrap();
 
             match operation {
                 "tick" => {
@@ -152,12 +160,12 @@ pub mod todo {
                         .and_then(|v| v.as_u64())
                         .ok_or("Missing required parameter: task_id (required for 'tick' operation)")? as usize;
 
-                    if task_id >= state_guard.len() {
-                        return Err(format!("Task index {} is out of range. There are {} tasks.", task_id, state_guard.len()).into());
+                    if task_id >= tasks.len() {
+                        return Err(format!("Task index {} is out of range. There are {} tasks.", task_id, tasks.len()).into());
                     }
 
-                    state_guard[task_id].completed = !state_guard[task_id].completed;
-                    let status = if state_guard[task_id].completed { "completed" } else { "uncompleted" };
+                    tasks[task_id].completed = !tasks[task_id].completed;
+                    let status = if tasks[task_id].completed { "completed" } else { "uncompleted" };
                     Ok(format!("Task {} marked as {}.", task_id, status))
                 }
                 "insert" => {
@@ -173,14 +181,14 @@ pub mod todo {
                     // Check if position is provided
                     let result_msg = if let Some(position) = args.get("position").and_then(|v| v.as_u64()) {
                         let pos = position as usize;
-                        if pos > state_guard.len() {
-                            return Err(format!("Position {} is out of range. There are {} tasks. Use position <= {} to insert.", pos, state_guard.len(), state_guard.len()).into());
+                        if pos > tasks.len() {
+                            return Err(format!("Position {} is out of range. There are {} tasks. Use position <= {} to insert.", pos, tasks.len(), tasks.len()).into());
                         }
-                        state_guard.insert(pos, new_task);
+                        tasks.insert(pos, new_task);
                         format!("Task inserted at position {}. Continue with the next step.", pos)
                     } else {
-                        let pos = state_guard.len();
-                        state_guard.push(new_task);
+                        let pos = tasks.len();
+                        tasks.push(new_task);
                         format!("Task added to the end of the list (position {}). Continue with the next step.", pos)
                     };
                     
@@ -191,20 +199,55 @@ pub mod todo {
                         .and_then(|v| v.as_u64())
                         .ok_or("Missing required parameter: task_id (required for 'delete' operation)")? as usize;
 
-                    if task_id >= state_guard.len() {
-                        return Err(format!("Task index {} is out of range. There are {} tasks.", task_id, state_guard.len()).into());
+                    if task_id >= tasks.len() {
+                        return Err(format!("Task index {} is out of range. There are {} tasks.", task_id, tasks.len()).into());
                     }
 
-                    let removed_task = state_guard.remove(task_id);
+                    let removed_task = tasks.remove(task_id);
                     Ok(format!("Task {} deleted: '{}'", task_id, removed_task.description))
                 }
                 _ => Err(format!("Unknown operation: {}. Must be 'tick', 'insert', or 'delete'.", operation).into())
             }
-            .and_then(|msg| {
-                // Persist after mutation
+        }
+
+        fn modify_task(&self, args: &serde_json::Value) -> Result<String, Box<dyn Error>> {
+            // Batch operations path
+            if args.get("operations").is_some() {
+                let ops = args.get("operations")
+                    .and_then(|v| v.as_array())
+                    .ok_or("The 'operations' parameter must be an array of objects.")?;
+
+                if ops.is_empty() {
+                    return Err("The 'operations' array is empty. Provide at least one operation.".into());
+                }
+
+                let mut state_guard = self.state.lock().unwrap();
+                let mut updated_tasks = state_guard.clone();
+                let mut messages = Vec::new();
+
+                for (idx, op_args) in ops.iter().enumerate() {
+                    let msg = Self::apply_operation(&mut updated_tasks, op_args)
+                        .map_err(|e| format!("Operation {} failed: {}", idx, e))?;
+                    messages.push(msg);
+                }
+
+                *state_guard = updated_tasks;
                 self.save_state(&state_guard)?;
-                Ok(msg)
-            })
+
+                let summary = format!("Applied {} operations:\n{}", messages.len(), messages.join("\n"));
+                return Ok(summary);
+            }
+
+            // Single operation path (backward compatible)
+            let mut state_guard = self.state.lock().unwrap();
+            let mut updated_tasks = state_guard.clone();
+
+            let message = Self::apply_operation(&mut updated_tasks, args)?;
+
+            *state_guard = updated_tasks;
+            self.save_state(&state_guard)?;
+
+            Ok(message)
         }
     }
 

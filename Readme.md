@@ -1,6 +1,9 @@
 # Pengy Agent CLI
 
-A terminal-based chat interface for interacting with AI agents and LLMs.
+A terminal-based chat interface for interacting with AI agents and LLMs written in Rust. 
+
+![Main Page Screenshot](./MainPage.png)
+
 
 ## Why PengyAgent
 
