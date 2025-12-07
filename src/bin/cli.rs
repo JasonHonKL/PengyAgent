@@ -128,6 +128,8 @@ struct App {
     tx: mpsc::UnboundedSender<AgentEvent>,
     agent_rx: mpsc::UnboundedReceiver<Agent>,
     agent_tx: mpsc::UnboundedSender<Agent>,
+    modified_files: std::collections::HashMap<String, (usize, usize)>, // file_path -> (added, removed) lines
+    pending_tool_calls: Vec<(String, String, String)>, // Vec of (id, name, args) for pending tool calls
 }
 
 impl App {
@@ -234,6 +236,8 @@ impl App {
             tx,
             agent_rx,
             agent_tx,
+            modified_files: std::collections::HashMap::new(),
+            pending_tool_calls: Vec::new(),
         })
     }
 
@@ -277,6 +281,7 @@ impl App {
         self.user_scrolled = false;
         self.agent = None;
         self.loading = false;
+        self.modified_files.clear();
         // Clear todo list for new session
         let todo_file = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -680,19 +685,50 @@ impl App {
                     // Hide step events (user does not want to see steps)
                 }
                 AgentEvent::ToolCall { tool_name, args } => {
-                    self.chat_messages.push(ChatMessage::ToolCall {
-                        id: format!("tool_{}", self.chat_messages.len()),
-                        name: tool_name,
-                        args,
-                        result: None,
-                        status: ToolStatus::Running,
-                    });
+                    // Store tool call info temporarily - don't show until we have result
+                    let tool_id = format!("tool_{}", self.chat_messages.len() + self.pending_tool_calls.len());
+                    self.pending_tool_calls.push((tool_id, tool_name, args));
                 }
                 AgentEvent::ToolResult { result } => {
-                    // Find the last running tool call and update it
-                    if let Some(ChatMessage::ToolCall { result: r, status, .. }) = self.chat_messages.iter_mut().rev().find(|m| matches!(m, ChatMessage::ToolCall { status: ToolStatus::Running, .. })) {
-                        *r = Some(result);
-                        *status = ToolStatus::Success;
+                    // Get the most recent pending tool call and create ChatMessage with result
+                    // This avoids showing "running" state and duplication
+                    if let Some((tool_id, name, args_str)) = self.pending_tool_calls.pop() {
+                        // Create tool call message directly with success status
+                        self.chat_messages.push(ChatMessage::ToolCall {
+                            id: tool_id.clone(),
+                            name: name.clone(),
+                            args: args_str.clone(),
+                            result: Some(result.clone()),
+                            status: ToolStatus::Success,
+                        });
+                        
+                        // Track file modifications for edit tool
+                        if name == "edit" {
+                            if let Ok(json_args) = serde_json::from_str::<serde_json::Value>(&args_str) {
+                                if let Some(file_path) = json_args.get("filePath").and_then(|v| v.as_str()) {
+                                    if let (Some(old_str), Some(new_str)) = (
+                                        json_args.get("oldString").and_then(|v| v.as_str()),
+                                        json_args.get("newString").and_then(|v| v.as_str()),
+                                    ) {
+                                        let added = new_str.lines().count();
+                                        let removed = old_str.lines().count();
+                                        let entry = self.modified_files.entry(file_path.to_string())
+                                            .or_insert((0, 0));
+                                        entry.0 += added;
+                                        entry.1 += removed;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // No pending tool call found - create one anyway (shouldn't happen but handle gracefully)
+                        self.chat_messages.push(ChatMessage::ToolCall {
+                            id: format!("tool_{}", self.chat_messages.len()),
+                            name: "unknown".to_string(),
+                            args: String::new(),
+                            result: Some(result),
+                            status: ToolStatus::Success,
+                        });
                     }
                 }
                 AgentEvent::Thinking { content } => {
@@ -1162,7 +1198,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(1),     // header
             Constraint::Min(0),        // main area - takes all available space
-            Constraint::Length(7),     // input (thicker for better UX)
+            Constraint::Length(3),     // input (thin 3-line input like standard terminal/OpenCode)
             Constraint::Length(1),     // status bar
         ])
         .split(f.area());
@@ -1172,16 +1208,17 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Main area: special layout for Welcome to give logo space; Chat uses full width; others keep split view.
     match app.state {
         AppState::Welcome => {
-            let main_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .split(layout[1]);
-            render_messages(f, app, main_chunks[0]);
-            render_welcome(f, app, main_chunks[1]);
+            // Welcome uses full width for elegant centered design
+            render_welcome(f, app, layout[1]);
         }
         AppState::Chat => {
-            // Chat state uses full width - no right panel
-            render_messages(f, app, layout[1]);
+            // Chat state with right sidebar for modified files - much thinner
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(85), Constraint::Length(25)]) // Much thinner sidebar
+                .split(layout[1]);
+            render_messages(f, app, main_chunks[0]);
+            render_chat_sidebar(f, app, main_chunks[1]);
         }
         AppState::SessionSelector => {
             let main_chunks = Layout::default()
@@ -1210,7 +1247,18 @@ fn ui(f: &mut Frame, app: &mut App) {
         }
     }
 
-    render_input(f, app, layout[2]);
+    // Center input - welcome uses full screen centering
+    match app.state {
+        AppState::Welcome => {
+            // Center input area on welcome page (like OpenCode) - matches OpenCode welcome styling
+            let centered_input = centered_rect(70, 12, f.area()); // Using 12% height for better OpenCode match
+            render_input(f, app, centered_input);
+        }
+        _ => {
+            // Full width input for chat and other states
+            render_input(f, app, layout[2]);
+        }
+    }
     render_status_bar(f, app, layout[3]);
 }
 
@@ -1271,34 +1319,56 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                         let old_lines: Vec<String> = old_string.lines().map(|s| s.to_string()).collect();
                         let new_lines: Vec<String> = new_string.lines().map(|s| s.to_string()).collect();
                         
-                        result.push(Line::from(vec![Span::raw("")]));
-                        result.push(Line::from(vec![
-                            Span::styled("  Changes:", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
-                        ]));
-                        
+                        // Clean, elegant diff display - fixed-width side-by-side columns
                         let max_lines = old_lines.len().max(new_lines.len());
-                        for idx in 0..max_lines {
+                        let max_display_lines = 25.min(max_lines);
+
+                        let left_width: usize = 52;  // fixed width for old column (including line number)
+                        let right_width: usize = 52; // fixed width for new column (including line number)
+
+                        let truncate_to = |s: &str, width: usize| -> String {
+                            if s.len() > width {
+                                format!("{}…", &s[..width.saturating_sub(1)])
+                            } else {
+                                s.to_string()
+                            }
+                        };
+
+                        for idx in 0..max_display_lines {
                             let old_line_owned = old_lines.get(idx).cloned().unwrap_or_else(|| "".to_string());
                             let new_line_owned = new_lines.get(idx).cloned().unwrap_or_else(|| "".to_string());
 
+                            let line_num = idx + 1;
+
+                            // Build fixed-width columns with line numbers
+                            let old_display = truncate_to(&old_line_owned, left_width.saturating_sub(6)); // leave space for "#### "
+                            let new_display = truncate_to(&new_line_owned, right_width.saturating_sub(6));
+
+                            let left_col = format!("{:>4} {}", line_num, old_display);
+                            let right_col = format!("{:>4} {}", line_num, new_display);
+
+                            let padded_left = format!("{:<width$}", left_col, width = left_width);
+                            let padded_right = format!("{:<width$}", right_col, width = right_width);
+
                             if old_line_owned != new_line_owned {
                                 result.push(Line::from(vec![
-                                    Span::styled("  ← ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                                    Span::styled(old_line_owned.clone(), Style::default().fg(Color::Red).bg(Color::Rgb(40, 20, 20))),
+                                    Span::styled(padded_left.clone(), Style::default().fg(Color::Rgb(200, 100, 100)).bg(Color::Rgb(40, 20, 20))),
+                                    Span::styled(" │ ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                                    Span::styled(padded_right.clone(), Style::default().fg(Color::White).bg(Color::Rgb(20, 100, 20))), // Green bg, white text
                                 ]));
+                            } else if !new_line_owned.is_empty() {
+                                // Unchanged/new line: show single column with neutral color
                                 result.push(Line::from(vec![
-                                    Span::styled("  → ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                                    Span::styled(new_line_owned.clone(), Style::default().fg(Color::Green).bg(Color::Rgb(20, 40, 20))),
+                                    Span::styled(format!("{:<width$}", format!("{:>4} {}", line_num, new_display), width = left_width + 3 + right_width), Style::default().fg(Color::White)),
                                 ]));
                             }
-                            
-                            if result.len() > 24 {
-                                result.push(Line::from(Span::styled(
-                                    "  ... diff truncated",
-                                    Style::default().fg(Color::DarkGray)
-                                )));
-                                break;
-                            }
+                        }
+                        
+                        if max_lines > max_display_lines {
+                            result.push(Line::from(Span::styled(
+                                format!("  ... {} more lines", max_lines - max_display_lines),
+                                Style::default().fg(Color::DarkGray)
+                            )));
                         }
                     }
             }
@@ -1426,63 +1496,57 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
 }
 
 fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status: &ToolStatus) -> ListItem<'static> {
-                let status_style = match status {
-                    ToolStatus::Running => Style::default().fg(Color::Yellow),
-                    ToolStatus::Success => Style::default().fg(Color::Green),
-                    ToolStatus::Error => Style::default().fg(Color::Red),
-                };
-                let icon = match status {
-                    ToolStatus::Running => "⏳",
-                    ToolStatus::Success => "✓",
-                    ToolStatus::Error => "✗",
-                };
-                
-    // Neutral dark background for all cards (no green theme)
-    let card_bg = Color::Rgb(20, 20, 20);
+    let status_style = match status {
+        ToolStatus::Running => Style::default().fg(Color::Yellow),
+        ToolStatus::Success => Style::default().fg(Color::Rgb(100, 200, 100)), // Softer green
+        ToolStatus::Error => Style::default().fg(Color::Rgb(200, 100, 100)), // Softer red
+    };
+    let icon = match status {
+        ToolStatus::Running => "⏳",
+        ToolStatus::Success => "✓",
+        ToolStatus::Error => "✗",
+    };
     
-    // Better card design with proper spacing
-                let mut lines = vec![
-                    Line::from(vec![
+    // Clean, minimal card design
+    let card_bg = Color::Rgb(25, 25, 25); // Slightly lighter for better visibility
+    
+    // Minimal header - just icon and name, no extra spacing
+    let mut lines = vec![
+        Line::from(vec![
             Span::styled(format!("{} ", icon), status_style.add_modifier(Modifier::BOLD)),
             Span::styled(format!("{}", name), status_style.add_modifier(Modifier::BOLD)),
         ]),
-        Line::from(vec![Span::raw("")]), // Empty line for spacing
     ];
     
-    // Add formatted args display
+    // Add formatted args display - cleaner, more compact
     let args_lines = format_tool_args_display(name, args);
     if !args_lines.is_empty() {
         lines.extend(args_lines);
-        lines.push(Line::from(vec![Span::raw("")])); // Spacing after args
     }
     
-    // Add result if available
-                if let Some(res) = result {
+    // Add result if available - minimal, clean display
+    if let Some(res) = result {
         if !res.trim().is_empty() {
-                    lines.push(Line::from(vec![
-                Span::styled("Result: ", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
-            ]));
-            
-            // For edit tool, show success message
+            // For edit tool, just show success message briefly
             if name == "edit" && status == &ToolStatus::Success {
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default()),
-                    Span::styled(res.clone(), Style::default().fg(Color::Green)),
+                    Span::styled(res.clone(), Style::default().fg(Color::Rgb(100, 200, 100))),
                 ]));
-            } else {
+            } else if name != "edit" {
                 // For other tools, show result (truncated if too long)
-                let result_lines: Vec<&str> = res.lines().take(10).collect();
+                let result_lines: Vec<&str> = res.lines().take(8).collect();
                 for line in result_lines {
                     lines.push(Line::from(vec![
                         Span::styled("  ", Style::default()),
-                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                        Span::styled(line.to_string(), Style::default().fg(Color::Rgb(200, 200, 200))),
                     ]));
                 }
-                if res.lines().count() > 10 {
+                if res.lines().count() > 8 {
                     lines.push(Line::from(vec![
                         Span::styled(
-                            format!("  ... ({} more lines)", res.lines().count() - 10),
-                            Style::default().fg(Color::DarkGray)
+                            format!("  ... ({} more lines)", res.lines().count() - 8),
+                            Style::default().fg(Color::Rgb(100, 100, 100))
                         ),
                     ]));
                 }
@@ -1490,7 +1554,7 @@ fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status
         }
     }
     
-    // Create card with border-like effect using padding
+    // Create clean card
     ListItem::new(lines)
         .style(Style::default().bg(card_bg))
 }
@@ -1588,11 +1652,27 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
-    // OpenCode-style input: exactly like opencode - simple single line with wrapping
+    // Thick input area with colored background similar to OpenCode
+    let input_bg_color = Color::Rgb(30, 30, 30); // Dark gray for strong contrast
+    
+    // Fill the background
+    let bg_block = Block::default()
+        .style(Style::default().bg(input_bg_color));
+    f.render_widget(bg_block, area);
+    
+    // Inner area with minimal padding for comfortable typing
+    // Less vertical padding for a tighter, more OpenCode-like feel
+    let inner_area = Rect {
+        x: area.x + 1,
+        y: area.y + 1,  // Reduced top padding
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),  // Reduced bottom padding
+    };
+    
     let prompt = "> ";
     
     // Calculate available width for input text
-    let available_width = area.width.saturating_sub(prompt.len() as u16);
+    let available_width = inner_area.width.saturating_sub(prompt.len() as u16);
     
     // Wrap text to fit width (character-based, not word-based for code/commands)
     let input_text = &app.chat_input;
@@ -1611,63 +1691,38 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
         wrapped_lines.push(current_line);
     }
     
-    // Render input lines
+    // Render input lines - OpenCode style with white text
     let mut input_content = Vec::new();
+    
+    // Dynamic vertical centering logic
+    let content_lines = wrapped_lines.len();
+    let available_height = inner_area.height as usize;
+    
+    // Add vertical padding to center content
+    let top_padding = available_height.saturating_sub(content_lines) / 2;
+    for _ in 0..top_padding {
+        input_content.push(Line::from(vec![Span::raw("")]));
+    }
+    
     for (i, line) in wrapped_lines.iter().enumerate() {
         let prefix = if i == 0 { prompt } else { "  " };
         input_content.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(Color::White)),
-            Span::styled(line.clone(), Style::default().fg(Color::White)),
+            Span::styled(prefix.to_string(), Style::default().fg(Color::Rgb(180, 180, 180)).bg(input_bg_color)), 
+            Span::styled(line.clone(), Style::default().fg(Color::White).bg(input_bg_color).add_modifier(Modifier::BOLD)),
         ]));
+        // Add spacing only if there's room
+        if i < wrapped_lines.len() - 1 && top_padding > 0 {
+             // No extra spacing lines when tight
+        }
     }
     
-    // Render input
-    let input_paragraph = Paragraph::new(input_content)
-        .style(Style::default().fg(Color::White));
-    f.render_widget(input_paragraph, area);
+    // Render input - NO style override on Paragraph, let spans control colors
+    let input_paragraph = Paragraph::new(input_content);
+    f.render_widget(input_paragraph, inner_area);
 
-    // Show hint on the same line as input (like opencode) - only if no text entered
-    if app.chat_input.trim().is_empty() {
-        let hint_text = if app.loading {
-            "working.. esc interrupt"
-        } else {
-            "enter send"
-        };
-        
-        // Calculate where to place hint (right side of first line)
-        let first_line_len = if !wrapped_lines.is_empty() {
-            wrapped_lines[0].len() + prompt.len()
-        } else {
-            prompt.len()
-        };
-        
-        let hint_x = (area.x + first_line_len as u16 + 2).min(area.x + area.width.saturating_sub(hint_text.len() as u16 + 1));
-        let hint = Paragraph::new(hint_text)
-            .style(Style::default().fg(Color::DarkGray));
-        let hint_area = Rect {
-            x: hint_x,
-            y: area.y,
-            width: area.width.saturating_sub((hint_x - area.x) as u16),
-            height: 1,
-        };
-        f.render_widget(hint, hint_area);
-    }
-    // Extra padding lines for thicker input area (better UX)
-    for i in 2..6 {
-        let padding_area = Rect {
-            x: area.x,
-            y: area.y + i,
-            width: area.width,
-            height: 1,
-        };
-        f.render_widget(Paragraph::new(""), padding_area);
-    }
+    // Hints removed for a cleaner OpenCode-like input
 
-    if app.show_command_hints {
-        render_command_hints(f, app, area);
-    }
-
-    // Calculate cursor position
+    // Calculate cursor position (adjusted for new inner area)
     let mut char_count = 0;
     let mut cursor_line = 0;
     let mut cursor_col = 0;
@@ -1687,9 +1742,10 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
     }
     
     let prefix_len = if cursor_line == 0 { prompt.len() } else { 2 };
-    let cursor_x = (area.x + prefix_len as u16 + cursor_col as u16)
-        .min(area.x + area.width.saturating_sub(1));
-    let cursor_y = area.y + cursor_line as u16;
+    let cursor_x = (inner_area.x + prefix_len as u16 + cursor_col as u16)
+        .min(inner_area.x + inner_area.width.saturating_sub(1));
+    // Account for calculated top padding
+    let cursor_y = inner_area.y + top_padding as u16 + cursor_line as u16;
     f.set_cursor_position((cursor_x, cursor_y));
 }
 
@@ -1697,9 +1753,13 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let model_name = app.selected_model.as_ref().map(|m| m.name.clone()).unwrap_or_else(|| "None".to_string());
     let agent_name = format!("{:?}", app.selected_agent);
     let loading = if app.loading { "● Running" } else { "● Idle" };
-    let status_text = format!(" Model: {} │ Agent: {} │ {} ", model_name, agent_name, loading);
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .to_string_lossy()
+        .to_string();
+    let status_text = format!(" {} │ Model: {} │ Agent: {} │ {} ", cwd, model_name, agent_name, loading);
     let status = Paragraph::new(status_text)
-        .style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+        .style(Style::default().fg(Color::Rgb(150, 150, 150)).bg(Color::Black));
     f.render_widget(status, area);
 }
 
@@ -1727,64 +1787,118 @@ fn render_chat_panel(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(p, area);
 }
 
-// Reuse other render functions...
-fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
+fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Clear, area);
+    
+    // OpenCode-style sidebar with modified files
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(10),  // Logo
-            Constraint::Length(3),   // Spacing
-            Constraint::Min(5),      // Sessions list
-            Constraint::Length(2),   // Hint text
+            Constraint::Length(3),   // Title
+            Constraint::Min(5),      // Modified files
+            Constraint::Length(2),   // Spacing
+            Constraint::Length(3),   // Context info
+            Constraint::Min(0),      // Fill remaining
+        ])
+        .split(area);
+    
+    // Title - elegant like OpenCode
+    let title = Paragraph::new("Modified Files")
+        .style(Style::default().fg(Color::Rgb(200, 200, 200)).add_modifier(Modifier::BOLD));
+    f.render_widget(title, vertical[0]);
+    
+    // Modified files list
+    if !app.modified_files.is_empty() {
+        let mut file_items: Vec<Line> = Vec::new();
+        for (file_path, (added, removed)) in app.modified_files.iter() {
+            // Extract just filename for display
+            let filename = std::path::Path::new(file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(file_path);
+            
+            let added_str = format!("+{}", added);
+            let removed_str = format!("-{}", removed);
+            
+            file_items.push(Line::from(vec![
+                Span::styled(filename.to_string(), Style::default().fg(Color::Rgb(220, 220, 220))),
+                Span::raw(" "),
+                Span::styled(added_str, Style::default().fg(Color::Rgb(100, 200, 100))), // Green for additions
+                Span::raw(" "),
+                Span::styled(removed_str, Style::default().fg(Color::Rgb(200, 100, 100))), // Red for removals
+            ]));
+        }
+        
+        let files_para = Paragraph::new(file_items)
+            .wrap(Wrap { trim: true });
+        f.render_widget(files_para, vertical[1]);
+    } else {
+        let empty_msg = Paragraph::new("No files modified yet")
+            .style(Style::default().fg(Color::Rgb(100, 100, 100)))
+            .wrap(Wrap { trim: true });
+        f.render_widget(empty_msg, vertical[1]);
+    }
+    
+    // Session info - show current session and working directory
+    let current_dir = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .to_string_lossy()
+        .to_string();
+    
+    let session_name = app.sessions.get(app.current_session)
+        .cloned()
+        .unwrap_or_else(|| "Unknown".to_string());
+    
+    let session_lines = vec![
+        Line::from(vec![
+            Span::styled("Session", Style::default().fg(Color::Rgb(150, 150, 150)).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default().fg(Color::Rgb(200, 200, 200))),
+            Span::styled(session_name, Style::default().fg(Color::Rgb(255, 200, 0))), // Gold for current session
+        ]),
+        Line::from(vec![Span::raw("")]),
+        Line::from(vec![
+            Span::styled("  ", Style::default().fg(Color::Rgb(120, 120, 120))),
+            Span::styled(current_dir, Style::default().fg(Color::Rgb(150, 150, 150))),
+        ]),
+    ];
+    let session_para = Paragraph::new(session_lines)
+        .style(Style::default().fg(Color::Rgb(150, 150, 150)))
+        .wrap(Wrap { trim: true });
+    f.render_widget(session_para, vertical[3]);
+}
+
+// Reuse other render functions...
+fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
+    f.render_widget(Clear, area);
+    
+    // Create a centered layout - just logo and version
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(20),  // Top spacing
+            Constraint::Length(12),      // Logo + version
+            Constraint::Min(0),          // Remaining space
         ])
         .split(area);
 
-    // Logo
+    // Logo - centered, elegant
     let logo_lines: Vec<Line> = app.logo.lines().map(|l| Line::from(Span::styled(l, Style::default().fg(Color::White)))).collect();
     let logo = Paragraph::new(logo_lines).alignment(Alignment::Center);
-    f.render_widget(logo, vertical[0]);
+    f.render_widget(logo, vertical[1]);
 
-    // Sessions list with elegant design
-    if !app.sessions.is_empty() {
-        let session_items: Vec<ListItem> = app.sessions
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let marker = if i == app.current_session {
-                    "● "
-                } else {
-                    "  "
-                };
-                let style = if i == app.current_session {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Gray)
-                };
-                ListItem::new(Line::from(vec![
-                    Span::styled(marker, style),
-                    Span::styled(s.clone(), style),
-                ]))
-            })
-            .collect();
-        
-        let sessions_block = Block::default()
-            .borders(Borders::NONE)
-            .title(Line::from(vec![
-                Span::styled("Sessions", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            ]));
-        
-        let sessions_list = List::new(session_items)
-            .block(sessions_block)
-            .style(Style::default().fg(Color::White));
-        f.render_widget(sessions_list, vertical[2]);
-    }
-
-    // Hint text
-    let hint = Paragraph::new("Type /help for available commands")
+    // Version below logo - subtle gray
+    let version_text = Paragraph::new(VERSION)
         .alignment(Alignment::Center)
-        .style(Style::default().fg(Color::DarkGray));
-    f.render_widget(hint, vertical[3]);
+        .style(Style::default().fg(Color::Rgb(100, 100, 100)));
+    let version_area = Rect {
+        x: vertical[1].x,
+        y: vertical[1].y + vertical[1].height.saturating_sub(1),
+        width: vertical[1].width,
+        height: 1,
+    };
+    f.render_widget(version_text, version_area);
 }
 
 // Helper functions
