@@ -1194,13 +1194,25 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }).collect();
 
+    let messages_len = messages.len();
+    
+    // Ensure the selected item is within bounds and visible
+    if let Some(selected) = app.list_state.selected() {
+        if selected >= messages_len && messages_len > 0 {
+            app.list_state.select(Some(messages_len.saturating_sub(1)));
+        }
+    } else if messages_len > 0 {
+        // If nothing is selected but we have messages, select the last one
+        app.list_state.select(Some(messages_len.saturating_sub(1)));
+    }
+    
     let messages_list = List::new(messages)
         .block(Block::default().borders(Borders::NONE))
         .highlight_symbol(">> ");
     
     f.render_stateful_widget(messages_list, area, &mut app.list_state);
 
-    // Scrollbar
+    // Scrollbar - automatically syncs with list state
     let scrollbar = Scrollbar::default()
         .orientation(ScrollbarOrientation::VerticalRight)
         .begin_symbol(Some("↑"))

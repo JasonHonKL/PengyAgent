@@ -133,6 +133,7 @@ pub mod agent {
                             // Check if we got tool calls or final response
                             // Look for tool call messages (they come in pairs: Assistant with "Tool call:" then User with "Tool result:")
                             let mut found_tool_call = false;
+                            let mut parsing_failed_critically = false;
                             
                             for msg in messages.iter().rev() {
                                 if matches!(msg.role, Role::Assistant) && msg.content.starts_with("Tool call:") {
@@ -266,7 +267,7 @@ pub mod agent {
                                                         if let Some(tool) = found_tool {
                                                             (tool, String::new(), false)
                                         } else {
-                                                            // Really can't parse - return unknown but log error
+                                                            // Really can't parse - this is a critical parsing failure
                                                             eprintln!("Critical: Could not parse tool call: {}", tool_info);
                                                             ("unknown".to_string(), String::new(), false)
                                                         }
@@ -275,8 +276,16 @@ pub mod agent {
                                             }
                                         };
                                         
-                                        // If parsing failed, log warning for debugging
-                                        if !parse_success {
+                                        // Check if parsing failed critically (couldn't extract tool name properly)
+                                        if !parse_success && tool_name == "unknown" {
+                                            parsing_failed_critically = true;
+                                            eprintln!("Tool call parsing failed critically - tool: {}, args: {}. Retrying...", tool_name, args);
+                                            // Break out of the message loop to trigger retry
+                                            break;
+                                        }
+                                        
+                                        // If parsing failed but we got something, log warning for debugging
+                                        if !parse_success && tool_name != "unknown" {
                                             eprintln!("Tool call parsing warning - tool: {}, args: {}", tool_name, args);
                                         }
                                         
@@ -288,6 +297,18 @@ pub mod agent {
                                     found_tool_call = true;
                                     break;
                                 }
+                            }
+                            
+                            // If parsing failed critically, retry the API call
+                            if parsing_failed_critically {
+                                retry_count += 1;
+                                if retry_count >= self.max_retry {
+                                    callback(AgentEvent::Error { error: format!("Tool call parsing failed after {} retries", self.max_retry) });
+                                    break Err("Tool call parsing failed after retries".into());
+                                }
+                                callback(AgentEvent::Error { error: format!("Tool call parsing failed (retry {}/{})", retry_count, self.max_retry) });
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100 * retry_count as u64)).await;
+                                continue; // Retry the API call
                             }
                             
                             // Find the tool result message to show the result
