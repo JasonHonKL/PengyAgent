@@ -17,6 +17,7 @@ use ratatui::{
     },
     Frame, Terminal,
 };
+use serde_json;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -118,6 +119,7 @@ struct App {
     custom_base_url: String,
     custom_model_field: usize,
     previous_state: Option<AppState>,
+    user_scrolled: bool,  // Track if user manually scrolled (don't auto-scroll)
     rx: mpsc::UnboundedReceiver<AgentEvent>,
     tx: mpsc::UnboundedSender<AgentEvent>,
     agent_rx: mpsc::UnboundedReceiver<Agent>,
@@ -230,6 +232,7 @@ impl App {
             custom_base_url,
             custom_model_field: 0,
             previous_state: None,
+            user_scrolled: false,
             rx,
             tx,
             agent_rx,
@@ -567,6 +570,7 @@ impl App {
         self.chat_messages.push(ChatMessage::User(user_input.clone()));
         self.loading = true;
         self.error = None;
+        self.user_scrolled = false;  // Reset scroll state when sending new message
 
         let tx = self.tx.clone();
         
@@ -693,10 +697,151 @@ impl App {
                     self.chat_messages.push(ChatMessage::Thinking(format!("👁 {}", status)));
                 }
             }
-            // Auto scroll
+            // Auto scroll only if user hasn't manually scrolled
+            if !self.user_scrolled {
             self.list_state.select(Some(self.chat_messages.len().saturating_sub(1)));
         }
     }
+}
+}
+
+// Helper functions for key handling
+fn handle_welcome_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio::runtime::Runtime) -> Result<(), Box<dyn Error>> {
+    match key {
+        crossterm::event::KeyCode::Esc => return Err("quit".into()),
+        crossterm::event::KeyCode::Enter => {
+            if app.chat_input.starts_with('/') {
+                let cmd = app.chat_input.clone();
+                handle_command_inline(app, &cmd, AppState::Welcome);
+            } else {
+                if app.initialize_model().is_ok() {
+                    app.state = AppState::Chat;
+                    if !app.chat_input.trim().is_empty() {
+                        rt.block_on(app.send_message())?;
+                    }
+                }
+            }
+        }
+        crossterm::event::KeyCode::Char(c) => {
+            app.chat_input.insert(app.input_cursor, c);
+            app.input_cursor += 1;
+            app.show_command_hints = app.chat_input.starts_with('/');
+        }
+        crossterm::event::KeyCode::Backspace => {
+            if app.input_cursor > 0 {
+                app.input_cursor -= 1;
+                app.chat_input.remove(app.input_cursor);
+                app.show_command_hints = app.chat_input.starts_with('/');
+            }
+        }
+        crossterm::event::KeyCode::Left => if app.input_cursor > 0 { app.input_cursor -= 1; },
+        crossterm::event::KeyCode::Right => if app.input_cursor < app.chat_input.len() { app.input_cursor += 1; },
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_chat_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio::runtime::Runtime) -> Result<(), Box<dyn Error>> {
+    match key {
+        crossterm::event::KeyCode::Esc => return Err("quit".into()),
+        crossterm::event::KeyCode::Enter if !app.loading => {
+            if app.chat_input.starts_with('/') {
+                let cmd = app.chat_input.clone();
+                handle_command_inline(app, &cmd, AppState::Chat);
+            } else if !app.chat_input.trim().is_empty() {
+                rt.block_on(app.send_message())?;
+                app.show_command_hints = false;
+            }
+        }
+        crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Down | 
+        crossterm::event::KeyCode::PageUp | crossterm::event::KeyCode::PageDown => {
+            app.user_scrolled = true;
+            let len = app.chat_messages.len();
+            if len > 0 {
+                let selected = app.list_state.selected().unwrap_or(0);
+                let amount = match key {
+                    crossterm::event::KeyCode::PageUp | crossterm::event::KeyCode::PageDown => 10,
+                    _ => 1,
+                };
+                let new_selection = match key {
+                    crossterm::event::KeyCode::Up | crossterm::event::KeyCode::PageUp => selected.saturating_sub(amount),
+                    _ => (selected + amount).min(len.saturating_sub(1)),
+                };
+                app.list_state.select(Some(new_selection));
+            }
+        }
+        crossterm::event::KeyCode::End => {
+            app.user_scrolled = false;
+            if app.chat_messages.len() > 0 {
+                app.list_state.select(Some(app.chat_messages.len().saturating_sub(1)));
+            }
+        }
+        crossterm::event::KeyCode::Home => {
+            app.user_scrolled = true;
+            app.list_state.select(Some(0));
+        }
+        crossterm::event::KeyCode::Char(c) => {
+            app.chat_input.insert(app.input_cursor, c);
+            app.input_cursor += 1;
+            app.show_command_hints = app.chat_input.starts_with('/');
+        }
+        crossterm::event::KeyCode::Backspace => {
+            if app.input_cursor > 0 {
+                app.input_cursor -= 1;
+                app.chat_input.remove(app.input_cursor);
+                app.show_command_hints = app.chat_input.starts_with('/');
+            }
+        }
+        crossterm::event::KeyCode::Left => if app.input_cursor > 0 { app.input_cursor -= 1; },
+        crossterm::event::KeyCode::Right => if app.input_cursor < app.chat_input.len() { app.input_cursor += 1; },
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_command_inline(app: &mut App, cmd: &str, previous_state: AppState) {
+    if cmd.starts_with("/models") {
+        app.previous_state = Some(previous_state);
+        app.state = AppState::ModelSelector;
+    } else if cmd.starts_with("/agents") {
+        app.previous_state = Some(previous_state);
+        app.state = AppState::AgentSelector;
+    } else if cmd.starts_with("/settings") {
+        app.previous_state = Some(previous_state);
+        app.state = AppState::Settings;
+        app.error = None;
+        app.settings_api_key = app.api_key.clone();
+        app.settings_base_url = app
+            .selected_model
+            .as_ref()
+            .map(|m| m.base_url.clone())
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        app.settings_field = 0;
+        let models = App::get_available_models();
+        if let Some(selected) = &app.selected_model {
+            if let Some(idx) = models.iter().position(|m| m.name == selected.name) {
+                app.model_list_state.select(Some(idx));
+            }
+        }
+    } else if cmd.starts_with("/help") {
+        app.previous_state = Some(previous_state);
+        app.state = AppState::Help;
+    } else if cmd.starts_with("/clear") {
+        app.chat_messages.clear();
+        app.agent = None;
+        app.loading = false;
+        app.error = None;
+        let todo_file = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".pengy_todo.json");
+        let _ = std::fs::remove_file(&todo_file);
+        if !app.api_key.is_empty() {
+            let _ = app.initialize_agent();
+        }
+    }
+                                    app.chat_input.clear();
+                                    app.input_cursor = 0;
+                                    app.show_command_hints = false;
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -723,182 +868,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                     break;
                 }
 
-                match app.state {
+                let should_quit = match app.state {
                     AppState::Welcome => {
-                        match key.code {
-                            crossterm::event::KeyCode::Char('q') | crossterm::event::KeyCode::Esc => break,
-                            crossterm::event::KeyCode::Enter => {
-                                if app.chat_input.starts_with("/models") {
-                                    app.previous_state = Some(AppState::Welcome);
-                                    app.state = AppState::ModelSelector;
-                                    app.chat_input.clear();
-                                    app.input_cursor = 0;
-                                    app.show_command_hints = false;
-                                } else if app.chat_input.starts_with("/agents") {
-                                    app.previous_state = Some(AppState::Welcome);
-                                    app.state = AppState::AgentSelector;
-                                    app.chat_input.clear();
-                                    app.input_cursor = 0;
-                                    app.show_command_hints = false;
-                                } else if app.chat_input.starts_with("/settings") {
-                                    app.previous_state = Some(AppState::Welcome);
-                                    app.state = AppState::Settings;
-                                    app.error = None;
-                                    app.settings_api_key = app.api_key.clone();
-                                    app.settings_base_url = app
-                                        .selected_model
-                                        .as_ref()
-                                        .map(|m| m.base_url.clone())
-                                        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-                                    app.settings_field = 0;
-                                    let models = App::get_available_models();
-                                    if let Some(selected) = &app.selected_model {
-                                        if let Some(idx) = models.iter().position(|m| m.name == selected.name) {
-                                            app.model_list_state.select(Some(idx));
-                                        }
-                                    }
-                                    app.chat_input.clear();
-                                    app.input_cursor = 0;
-                                    app.show_command_hints = false;
-                                } else if app.chat_input.starts_with("/help") {
-                                    app.previous_state = Some(AppState::Welcome);
-                                    app.state = AppState::Help;
-                                    app.chat_input.clear();
-                                    app.input_cursor = 0;
-                                    app.show_command_hints = false;
-                                } else if app.chat_input.starts_with("/clear") {
-                                    // Clear conversation and reset agent
-                                    app.chat_messages.clear();
-                                    app.agent = None;
-                                    app.loading = false;
-                                    app.error = None;
-                                    // Clear todo list file
-                                    let todo_file = std::env::current_dir()
-                                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                                        .join(".pengy_todo.json");
-                                    let _ = std::fs::remove_file(&todo_file);
-                                    if !app.api_key.is_empty() {
-                                        let _ = app.initialize_agent();
-                                    }
-                                    app.chat_input.clear();
-                                    app.input_cursor = 0;
-                                    app.show_command_hints = false;
-                                } else {
-                                    // Default action: Enter chat
-                                    if app.initialize_model().is_ok() {
-                                        app.state = AppState::Chat;
-                                        if !app.chat_input.trim().is_empty() {
-                                            rt.block_on(app.send_message())?;
-                                        }
-                                    }
-                                }
-                            }
-                            crossterm::event::KeyCode::Char(c) => {
-                                app.chat_input.insert(app.input_cursor, c);
-                                app.input_cursor += 1;
-                                app.show_command_hints = app.chat_input.starts_with('/');
-                            }
-                            crossterm::event::KeyCode::Backspace => {
-                                if app.input_cursor > 0 {
-                                    app.input_cursor -= 1;
-                                    app.chat_input.remove(app.input_cursor);
-                                    app.show_command_hints = app.chat_input.starts_with('/');
-                                }
-                            }
-                            crossterm::event::KeyCode::Left => if app.input_cursor > 0 { app.input_cursor -= 1; },
-                            crossterm::event::KeyCode::Right => if app.input_cursor < app.chat_input.len() { app.input_cursor += 1; },
-                            _ => {}
+                        match handle_welcome_key(&mut app, key.code, &rt) {
+                            Err(e) if e.to_string() == "quit" => true,
+                            _ => false,
                         }
                     }
                     AppState::Chat => {
-                        match key.code {
-                            crossterm::event::KeyCode::Esc => break,
-                            crossterm::event::KeyCode::Enter if !app.loading => {
-                                if app.chat_input.starts_with('/') {
-                                    // Command handling similar to Welcome
-                                    if app.chat_input.starts_with("/models") {
-                                        app.previous_state = Some(AppState::Chat);
-                                        app.state = AppState::ModelSelector;
-                                    } else if app.chat_input.starts_with("/agents") {
-                                        app.previous_state = Some(AppState::Chat);
-                                        app.state = AppState::AgentSelector;
-                                    } else if app.chat_input.starts_with("/settings") {
-                                        app.previous_state = Some(AppState::Chat);
-                                        app.state = AppState::Settings;
-                                        app.error = None;
-                                        app.settings_api_key = app.api_key.clone();
-                                        app.settings_base_url = app
-                                            .selected_model
-                                            .as_ref()
-                                            .map(|m| m.base_url.clone())
-                                            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-                                        app.settings_field = 0;
-                                        let models = App::get_available_models();
-                                        if let Some(selected) = &app.selected_model {
-                                            if let Some(idx) = models.iter().position(|m| m.name == selected.name) {
-                                                app.model_list_state.select(Some(idx));
-                                            }
-                                        }
-                                    } else if app.chat_input.starts_with("/help") {
-                                        app.previous_state = Some(AppState::Chat);
-                                        app.state = AppState::Help;
-                                    } else if app.chat_input.starts_with("/clear") {
-                                        // Clear conversation and reset agent
-                                        app.chat_messages.clear();
-                                        app.agent = None;
-                                        app.loading = false;
-                                        app.error = None;
-                                        // Clear todo list file
-                                        let todo_file = std::env::current_dir()
-                                            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                                            .join(".pengy_todo.json");
-                                        let _ = std::fs::remove_file(&todo_file);
-                                        if !app.api_key.is_empty() {
-                                            let _ = app.initialize_agent();
-                                        }
-                                    }
-                                    app.chat_input.clear();
-                                    app.input_cursor = 0;
-                                    app.show_command_hints = false;
-                                } else if !app.chat_input.trim().is_empty() {
-                                    rt.block_on(app.send_message())?;
-                                    app.show_command_hints = false;
-                                }
-                            }
-                            crossterm::event::KeyCode::Char(c) => {
-                                app.chat_input.insert(app.input_cursor, c);
-                                app.input_cursor += 1;
-                                app.show_command_hints = app.chat_input.starts_with('/');
-                            }
-                            crossterm::event::KeyCode::Backspace => {
-                                if app.input_cursor > 0 {
-                                    app.input_cursor -= 1;
-                                    app.chat_input.remove(app.input_cursor);
-                                    app.show_command_hints = app.chat_input.starts_with('/');
-                                }
-                            }
-                            crossterm::event::KeyCode::Left => if app.input_cursor > 0 { app.input_cursor -= 1; },
-                            crossterm::event::KeyCode::Right => if app.input_cursor < app.chat_input.len() { app.input_cursor += 1; },
-                            crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Down | crossterm::event::KeyCode::PageUp | crossterm::event::KeyCode::PageDown => {
-                                let len = app.chat_messages.len();
-                                if len > 0 {
-                                    let selected = app.list_state.selected().unwrap_or(0);
-                                    let amount = match key.code {
-                                        crossterm::event::KeyCode::PageUp | crossterm::event::KeyCode::PageDown => 10,
-                                        _ => 1,
-                                    };
-                                    let new_selection = match key.code {
-                                        crossterm::event::KeyCode::Up | crossterm::event::KeyCode::PageUp => selected.saturating_sub(amount),
-                                        _ => (selected + amount).min(len.saturating_sub(1)),
-                                    };
-                                    app.list_state.select(Some(new_selection));
-                                }
-                            }
-                            _ => {}
+                        match handle_chat_key(&mut app, key.code, &rt) {
+                            Err(e) if e.to_string() == "quit" => true,
+                            _ => false,
                         }
                     }
-                    // ... Other states (ModelSelector, Settings, etc.) use similar logic as before ...
-                    // Copying existing logic for brevity, assuming it works.
                     AppState::ModelSelector => {
                         match key.code {
                             crossterm::event::KeyCode::Esc => app.state = app.previous_state.clone().unwrap_or(AppState::Welcome),
@@ -938,6 +920,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             },
                             _ => {}
                         }
+                        false
                     },
                     AppState::AgentSelector => {
                         match key.code {
@@ -959,6 +942,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             },
                             _ => {}
                         }
+                        false
                     },
                     AppState::Settings => {
                         match key.code {
@@ -1033,6 +1017,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                             _ => {}
                         }
+                        false
                     },
                     AppState::CustomModel => {
                         match key.code {
@@ -1067,12 +1052,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                             },
                             _ => {}
                         }
+                        false
                     },
                     AppState::Help => {
-                        if matches!(key.code, crossterm::event::KeyCode::Esc | crossterm::event::KeyCode::Char('q')) {
+                        if key.code == crossterm::event::KeyCode::Esc {
                             app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
                         }
+                        false
                     }
+                };
+                
+                if should_quit {
+                    break;
                 }
             }
         }
@@ -1090,7 +1081,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(1),     // header
             Constraint::Min(8),        // main split
-            Constraint::Length(3),     // input
+            Constraint::Length(2),     // input (reduced from 3)
             Constraint::Length(1),     // status bar
         ])
         .split(f.area());
@@ -1134,22 +1125,109 @@ fn ui(f: &mut Frame, app: &mut App) {
     render_status_bar(f, app, layout[3]);
 }
 
-fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
-    let messages: Vec<ListItem> = app.chat_messages.iter().map(|msg| {
-        match msg {
-            ChatMessage::User(content) => {
-                ListItem::new(Line::from(vec![
-                    Span::styled("You: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::raw(content.clone()),
-                ]))
+fn parse_tool_args(args: &str) -> Option<serde_json::Value> {
+    serde_json::from_str(args).ok()
+}
+
+fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
+    let parsed = parse_tool_args(args);
+    let mut lines = Vec::new();
+    
+    match name {
+        "edit" => {
+            if let Some(json) = parsed {
+                if let (Some(file_path), Some(old_string), Some(new_string)) = (
+                    json.get("filePath").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    json.get("oldString").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    json.get("newString").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                ) {
+                    lines.push(Line::from(vec![
+                        Span::styled("  File: ", Style::default().fg(Color::Cyan)),
+                        Span::styled(file_path.clone(), Style::default().fg(Color::White)),
+                    ]));
+                    
+                    // Show diff with red/green highlighting
+                    let old_lines: Vec<String> = old_string.lines().map(|s| s.to_string()).collect();
+                    let new_lines: Vec<String> = new_string.lines().map(|s| s.to_string()).collect();
+                    
+                    // Show removed lines in red
+                    for old_line in &old_lines {
+                        if !old_line.trim().is_empty() || old_lines.len() == 1 {
+                            lines.push(Line::from(vec![
+                                Span::styled("  - ", Style::default().fg(Color::Red)),
+                                Span::styled(old_line.clone(), Style::default().fg(Color::Red).bg(Color::Rgb(40, 20, 20))),
+                            ]));
+                        }
+                    }
+                    
+                    // Show added lines in green
+                    for new_line in &new_lines {
+                        if !new_line.trim().is_empty() || new_lines.len() == 1 {
+                            lines.push(Line::from(vec![
+                                Span::styled("  + ", Style::default().fg(Color::Green)),
+                                Span::styled(new_line.clone(), Style::default().fg(Color::Green).bg(Color::Rgb(20, 40, 20))),
+                            ]));
+                        }
+                    }
+                    
+                    // Limit the number of lines shown to avoid overwhelming the UI
+                    if lines.len() > 20 {
+                        let mut truncated = lines[..2].to_vec();
+                        truncated.push(Line::from(Span::styled(
+                            format!("  ... ({} more lines)", lines.len() - 2),
+                            Style::default().fg(Color::DarkGray)
+                        )));
+                        return truncated;
+                    }
+                    return lines;
+                }
             }
-            ChatMessage::Assistant(content) => {
-                let lines: Vec<Line> = content.lines().map(|l| Line::from(l)).collect();
-                ListItem::new(vec![
-                    Line::from(Span::styled("Pengy: ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))),
-                ].into_iter().chain(lines).collect::<Vec<_>>())
+        }
+        "file_manager" => {
+            if let Some(json) = parsed {
+                if let Some(path) = json.get("path").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Path: ", Style::default().fg(Color::Cyan)),
+                        Span::styled(path.clone(), Style::default().fg(Color::White)),
+                    ]));
+                    if let Some(kind) = json.get("kind").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                        lines.push(Line::from(vec![
+                            Span::styled("  Kind: ", Style::default().fg(Color::Cyan)),
+                            Span::styled(kind, Style::default().fg(Color::White)),
+                        ]));
+                    }
+                    return lines;
+                }
             }
-            ChatMessage::ToolCall { name, args, result, status, .. } => {
+        }
+        "bash" => {
+            if let Some(json) = parsed {
+                if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Command: ", Style::default().fg(Color::Cyan)),
+                        Span::styled(cmd, Style::default().fg(Color::White)),
+                    ]));
+                    return lines;
+                }
+            }
+        }
+        _ => {}
+    }
+    
+    // Fallback: show raw args (truncated)
+    let truncated_args = if args.len() > 100 {
+        format!("{}...", &args[..100])
+    } else {
+        args.to_string()
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  Args: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(truncated_args, Style::default().fg(Color::Gray)),
+    ]));
+    lines
+}
+
+fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status: &ToolStatus) -> ListItem<'static> {
                 let status_style = match status {
                     ToolStatus::Running => Style::default().fg(Color::Yellow),
                     ToolStatus::Success => Style::default().fg(Color::Green),
@@ -1160,25 +1238,90 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                     ToolStatus::Success => "✓",
                     ToolStatus::Error => "✗",
                 };
+    
+    let card_bg = match status {
+        ToolStatus::Running => Color::Rgb(30, 30, 20),
+        ToolStatus::Success => Color::Rgb(20, 30, 20),
+        ToolStatus::Error => Color::Rgb(30, 20, 20),
+                };
                 
                 let mut lines = vec![
                     Line::from(vec![
-                        Span::styled(format!("{} Tool: {} ", icon, name), status_style.add_modifier(Modifier::BOLD)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("  Args: ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(args.clone(), Style::default().fg(Color::Gray)),
+            Span::styled(format!("{} ", icon), status_style.add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{}", name), status_style.add_modifier(Modifier::BOLD)),
+            Span::styled(
+                match status {
+                    ToolStatus::Running => " (running...)",
+                    ToolStatus::Success => " (success)",
+                    ToolStatus::Error => " (error)",
+                },
+                Style::default().fg(Color::DarkGray),
+            ),
                     ]),
                 ];
                 
+    // Add formatted args display
+    lines.extend(format_tool_args_display(name, args));
+    
+    // Add result if available
                 if let Some(res) = result {
+        if !res.trim().is_empty() {
                     lines.push(Line::from(vec![
-                        Span::styled("  Result: ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(res.chars().take(100).collect::<String>() + if res.len() > 100 { "..." } else { "" }, Style::default().fg(Color::DarkGray)),
+                Span::styled("  Result: ", Style::default().fg(Color::Cyan)),
+            ]));
+            
+            // For edit tool, show success message
+            if name == "edit" && status == &ToolStatus::Success {
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(res.clone(), Style::default().fg(Color::Green)),
+                ]));
+            } else {
+                // For other tools, show result (truncated if too long)
+                let result_lines: Vec<&str> = res.lines().take(10).collect();
+                for line in result_lines {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
                     ]));
                 }
-                
-                ListItem::new(lines).style(Style::default().bg(Color::Rgb(20, 20, 20)))
+                if res.lines().count() > 10 {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("  ... ({} more lines)", res.lines().count() - 10),
+                            Style::default().fg(Color::DarkGray)
+                        ),
+                    ]));
+                }
+            }
+        }
+    }
+    
+    ListItem::new(lines).style(Style::default().bg(card_bg))
+}
+
+fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
+    let messages: Vec<ListItem> = app.chat_messages.iter().map(|msg| {
+        match msg {
+            ChatMessage::User(content) => {
+                // Cleaner user message style like opencode
+                ListItem::new(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(Color::Blue)),
+                    Span::styled(content.clone(), Style::default().fg(Color::White)),
+                ]))
+            }
+            ChatMessage::Assistant(content) => {
+                // Cleaner assistant message style
+                let content_lines: Vec<Line> = content.lines().map(|l| {
+                    Line::from(vec![
+                        Span::styled("  ", Style::default()),
+                        Span::raw(l.to_string()),
+                    ])
+                }).collect();
+                ListItem::new(content_lines)
+            }
+            ChatMessage::ToolCall { name, args, result, status, .. } => {
+                render_tool_call_card(name, args, result, status)
             }
             ChatMessage::Thinking(content) => {
                 ListItem::new(Line::from(vec![
@@ -1218,7 +1361,7 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     
     let messages_list = List::new(messages)
         .block(Block::default().borders(Borders::NONE))
-        .highlight_symbol(">> ");
+        .highlight_style(Style::default().bg(Color::Rgb(40, 40, 40)));
     
     f.render_stateful_widget(messages_list, area, &mut app.list_state);
 
@@ -1242,20 +1385,39 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
-    let label = if app.loading { "Sending..." } else { "Message" };
-    let input_display = format!("{}: {}", label, app.chat_input);
+    // OpenCode-style input: clean prompt with ">" symbol
+    let prompt = "> ";
+    let input_display = format!("{}{}", prompt, app.chat_input);
+    
+    // Create a cleaner input area like opencode
     let input_paragraph = Paragraph::new(input_display)
-        .block(Block::default().borders(Borders::ALL).title("Input").border_style(Style::default().fg(Color::DarkGray)))
         .style(Style::default().fg(Color::White));
     f.render_widget(input_paragraph, area);
+
+    // Show hint below input
+    let hint_text = if app.loading {
+        "working.. esc interrupt"
+    } else {
+        "enter send"
+    };
+    let hint = Paragraph::new(hint_text)
+        .style(Style::default().fg(Color::DarkGray));
+    let hint_area = Rect {
+        x: area.x,
+        y: area.y + 1,
+        width: area.width,
+        height: 1,
+    };
+    f.render_widget(hint, hint_area);
 
     if app.show_command_hints {
         render_command_hints(f, app, area);
     }
 
-    let cursor_x = (area.x + 2 + label.len() as u16 + 2 + app.input_cursor as u16)
+    // Cursor position after the prompt
+    let cursor_x = (area.x + prompt.len() as u16 + app.input_cursor as u16)
         .min(area.x + area.width.saturating_sub(1));
-    let cursor_y = area.y + 1;
+    let cursor_y = area.y;
     f.set_cursor_position((cursor_x, cursor_y));
 }
 
