@@ -33,6 +33,7 @@ use tokio::sync::mpsc;
 
 const VERSION: &str = "v0.1.0";
 const CONFIG_FILE: &str = ".pengy_config.json";
+const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
 #[derive(Clone, PartialEq, Debug)]
 enum AppState {
@@ -109,6 +110,8 @@ struct App {
     model_list_state: ListState,
     agent_list_state: ListState,
     settings_api_key: String,
+    settings_base_url: String,
+    settings_field: usize,
     search_query: String,
     show_command_hints: bool,
     custom_model_name: String,
@@ -117,6 +120,8 @@ struct App {
     previous_state: Option<AppState>,
     rx: mpsc::UnboundedReceiver<AgentEvent>,
     tx: mpsc::UnboundedSender<AgentEvent>,
+    agent_rx: mpsc::UnboundedReceiver<Agent>,
+    agent_tx: mpsc::UnboundedSender<Agent>,
 }
 
 impl App {
@@ -181,16 +186,22 @@ impl App {
         agent_list_state.select(Some(0));
 
         let (tx, rx) = mpsc::unbounded_channel();
+        let (agent_tx, agent_rx) = mpsc::unbounded_channel();
 
         let (custom_model_name, custom_base_url) = if let Some(ref m) = selected_model {
             if m.provider == "Custom" {
                 (m.name.clone(), m.base_url.clone())
             } else {
-                (String::new(), "https://openrouter.ai/api/v1".to_string())
+                (String::new(), DEFAULT_BASE_URL.to_string())
             }
         } else {
-            (String::new(), "https://openrouter.ai/api/v1".to_string())
+            (String::new(), DEFAULT_BASE_URL.to_string())
         };
+
+        let settings_base_url = selected_model
+            .as_ref()
+            .map(|m| m.base_url.clone())
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
         Ok(Self {
             state: AppState::Welcome,
@@ -211,6 +222,8 @@ impl App {
             model_list_state,
             agent_list_state,
             settings_api_key: api_key,
+            settings_base_url,
+            settings_field: 0,
             search_query: String::new(),
             show_command_hints: false,
             custom_model_name,
@@ -219,6 +232,8 @@ impl App {
             previous_state: None,
             rx,
             tx,
+            agent_rx,
+            agent_tx,
         })
     }
 
@@ -251,26 +266,161 @@ impl App {
 
     fn get_available_models() -> Vec<ModelOption> {
         vec![
+            // Latest OpenAI Models (2025)
             ModelOption {
-                name: "x-ai/grok-beta".to_string(),
-                provider: "OpenRouter".to_string(),
-                base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                name: "openai/gpt-5.1".to_string(),
+                provider: "OpenAI".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
             },
             ModelOption {
-                name: "anthropic/claude-opus-4".to_string(),
-                provider: "OpenRouter".to_string(),
-                base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                name: "openai/polaris-alpha".to_string(),
+                provider: "OpenAI".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
             },
             ModelOption {
                 name: "openai/gpt-4o".to_string(),
-                provider: "OpenRouter".to_string(),
-                base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                provider: "OpenAI".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
             },
             ModelOption {
-                name: "google/gemini-3.0-flash-exp:free".to_string(),
-                provider: "OpenRouter".to_string(),
-                base_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                name: "openai/gpt-4o-mini".to_string(),
+                provider: "OpenAI".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
             },
+            // Latest Anthropic Models (2025)
+            ModelOption {
+                name: "anthropic/claude-sonnet-4.5".to_string(),
+                provider: "Anthropic".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "anthropic/claude-opus-4.5".to_string(),
+                provider: "Anthropic".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "anthropic/claude-3.5-sonnet".to_string(),
+                provider: "Anthropic".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "anthropic/claude-3.5-haiku".to_string(),
+                provider: "Anthropic".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            // Latest Google Models (2025)
+            ModelOption {
+                name: "google/gemini-3-pro".to_string(),
+                provider: "Google".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "google/gemini-2.5-flash-exp:free".to_string(),
+                provider: "Google".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "google/gemini-2.5-flash".to_string(),
+                provider: "Google".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "google/gemini-2.0-flash-exp:free".to_string(),
+                provider: "Google".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            // Latest xAI Models (2025)
+            ModelOption {
+                name: "x-ai/grok-4".to_string(),
+                provider: "xAI".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "x-ai/grok-code-fast-1".to_string(),
+                provider: "xAI".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            // Latest Mistral Models (2025)
+            ModelOption {
+                name: "mistralai/mistral-small-3.2-24b-instruct".to_string(),
+                provider: "Mistral".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "mistralai/devstral-small-2507".to_string(),
+                provider: "Mistral".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "mistralai/devstral-medium-2507".to_string(),
+                provider: "Mistral".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "mistralai/mistral-large-latest".to_string(),
+                provider: "Mistral".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            // Latest DeepSeek Models (2025)
+            ModelOption {
+                name: "deepseek/deepseek-v3.2".to_string(),
+                provider: "DeepSeek".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "deepseek/deepseek-r1t-chimera".to_string(),
+                provider: "DeepSeek".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "deepseek/deepseek-r1-distill-llama-70b".to_string(),
+                provider: "DeepSeek".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "deepseek/deepseek-coder-v2-instruct".to_string(),
+                provider: "DeepSeek".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            // Latest Meta Models (2025)
+            ModelOption {
+                name: "meta-llama/llama-4-maverick".to_string(),
+                provider: "Meta".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "meta-llama/llama-4-scout:free".to_string(),
+                provider: "Meta".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "meta-llama/llama-3.2-90b-vision-instruct".to_string(),
+                provider: "Meta".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "meta-llama/llama-3.1-70b-instruct".to_string(),
+                provider: "Meta".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            // Latest Qwen Models
+            ModelOption {
+                name: "qwen/qwen2.5-vl-32b-instruct".to_string(),
+                provider: "Qwen".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            ModelOption {
+                name: "qwen/qwen2.5-coder-32b-instruct".to_string(),
+                provider: "Qwen".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            // GLM Models
+            ModelOption {
+                name: "z-ai/glm-4.6".to_string(),
+                provider: "GLM".to_string(),
+                base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            // Custom Model
             ModelOption {
                 name: "Custom Model".to_string(),
                 provider: "Custom".to_string(),
@@ -283,8 +433,9 @@ impl App {
         vec![
             ("/models", "select model"),
             ("/agents", "select agent"),
-            ("/settings", "configure API key"),
+            ("/settings", "configure API key / model / base URL"),
             ("/help", "show help"),
+            ("/clear", "clear conversation and reset agent"),
         ]
     }
 
@@ -304,12 +455,20 @@ impl App {
         if trimmed.is_empty() {
             return String::new();
         }
-        let trimmed = trimmed.trim_end_matches('/');
-        if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/completions") || trimmed.ends_with("/completion") {
-            trimmed.to_string()
-        } else {
-            format!("{}/chat/completions", trimmed)
+        let mut normalized = trimmed.trim_end_matches('/').to_string();
+
+        for suffix in ["/chat/completions", "/completions", "/completion"] {
+            if normalized.ends_with(suffix) {
+                normalized = normalized
+                    .trim_end_matches('/')
+                    .trim_end_matches(suffix)
+                    .trim_end_matches('/')
+                    .to_string();
+                break;
+            }
         }
+
+        normalized
     }
 
     fn initialize_agent(&mut self) -> Result<(), Box<dyn Error>> {
@@ -447,6 +606,7 @@ impl App {
             }
             _ => {
                 // Other agents
+                let agent_tx = self.agent_tx.clone();
                 if let Some(agent) = self.agent.take() {
                     let mut agent_to_run = agent; // Move it out
                     
@@ -457,6 +617,9 @@ impl App {
                         };
                         
                         agent_to_run.run(user_input, callback).await;
+                        
+                        // Return the agent after completion
+                        let _ = agent_tx.send(agent_to_run);
                     });
                 } else {
                     // Re-init agent if missing
@@ -468,6 +631,9 @@ impl App {
                                 let _ = callback_tx.send(event);
                             };
                             agent.run(user_input, callback).await;
+                            
+                            // Return the agent after completion
+                            let _ = agent_tx.send(agent);
                         });
                     }
                 }
@@ -481,6 +647,12 @@ impl App {
     }
     
     fn process_events(&mut self) {
+        // First, restore agent if available
+        while let Ok(agent) = self.agent_rx.try_recv() {
+            self.agent = Some(agent);
+        }
+        
+        // Then process agent events
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 AgentEvent::Step { step, max_steps } => {
@@ -571,13 +743,38 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 } else if app.chat_input.starts_with("/settings") {
                                     app.previous_state = Some(AppState::Welcome);
                                     app.state = AppState::Settings;
+                                    app.error = None;
                                     app.settings_api_key = app.api_key.clone();
+                                    app.settings_base_url = app
+                                        .selected_model
+                                        .as_ref()
+                                        .map(|m| m.base_url.clone())
+                                        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+                                    app.settings_field = 0;
+                                    let models = App::get_available_models();
+                                    if let Some(selected) = &app.selected_model {
+                                        if let Some(idx) = models.iter().position(|m| m.name == selected.name) {
+                                            app.model_list_state.select(Some(idx));
+                                        }
+                                    }
                                     app.chat_input.clear();
                                     app.input_cursor = 0;
                                     app.show_command_hints = false;
                                 } else if app.chat_input.starts_with("/help") {
                                     app.previous_state = Some(AppState::Welcome);
                                     app.state = AppState::Help;
+                                    app.chat_input.clear();
+                                    app.input_cursor = 0;
+                                    app.show_command_hints = false;
+                                } else if app.chat_input.starts_with("/clear") {
+                                    // Clear conversation and reset agent
+                                    app.chat_messages.clear();
+                                    app.agent = None;
+                                    app.loading = false;
+                                    app.error = None;
+                                    if !app.api_key.is_empty() {
+                                        let _ = app.initialize_agent();
+                                    }
                                     app.chat_input.clear();
                                     app.input_cursor = 0;
                                     app.show_command_hints = false;
@@ -623,10 +820,32 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     } else if app.chat_input.starts_with("/settings") {
                                         app.previous_state = Some(AppState::Chat);
                                         app.state = AppState::Settings;
+                                        app.error = None;
                                         app.settings_api_key = app.api_key.clone();
+                                        app.settings_base_url = app
+                                            .selected_model
+                                            .as_ref()
+                                            .map(|m| m.base_url.clone())
+                                            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+                                        app.settings_field = 0;
+                                        let models = App::get_available_models();
+                                        if let Some(selected) = &app.selected_model {
+                                            if let Some(idx) = models.iter().position(|m| m.name == selected.name) {
+                                                app.model_list_state.select(Some(idx));
+                                            }
+                                        }
                                     } else if app.chat_input.starts_with("/help") {
                                         app.previous_state = Some(AppState::Chat);
                                         app.state = AppState::Help;
+                                    } else if app.chat_input.starts_with("/clear") {
+                                        // Clear conversation and reset agent
+                                        app.chat_messages.clear();
+                                        app.agent = None;
+                                        app.loading = false;
+                                        app.error = None;
+                                        if !app.api_key.is_empty() {
+                                            let _ = app.initialize_agent();
+                                        }
                                     }
                                     app.chat_input.clear();
                                     app.input_cursor = 0;
@@ -689,6 +908,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                                                     app.state = AppState::Chat;
                                                 }
                                             } else {
+                                                app.settings_api_key = app.api_key.clone();
+                                                app.settings_base_url = app.selected_model.as_ref().map(|m| m.base_url.clone()).unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+                                                app.settings_field = 0;
+                                                app.error = None;
                                                 app.state = AppState::Settings;
                                             }
                                         }
@@ -730,20 +953,74 @@ fn main() -> Result<(), Box<dyn Error>> {
                     AppState::Settings => {
                         match key.code {
                             crossterm::event::KeyCode::Esc => app.state = app.previous_state.clone().unwrap_or(AppState::Welcome),
+                            crossterm::event::KeyCode::Tab => {
+                                app.settings_field = (app.settings_field + 1) % 3;
+                            }
+                            crossterm::event::KeyCode::BackTab => {
+                                app.settings_field = (app.settings_field + 2) % 3;
+                            }
+                            crossterm::event::KeyCode::Up => {
+                                if app.settings_field == 2 {
+                                    let i = app.model_list_state.selected().unwrap_or(0).saturating_sub(1);
+                                    app.model_list_state.select(Some(i));
+                                }
+                            }
+                            crossterm::event::KeyCode::Down => {
+                                if app.settings_field == 2 {
+                                    let i = (app.model_list_state.selected().unwrap_or(0) + 1).min(App::get_available_models().len() - 1);
+                                    app.model_list_state.select(Some(i));
+                                }
+                            }
                             crossterm::event::KeyCode::Enter => {
                                 app.api_key = app.settings_api_key.clone();
+                                let normalized_base_url = {
+                                    let normalized = App::normalize_base_url(&app.settings_base_url);
+                                    if normalized.is_empty() {
+                                        DEFAULT_BASE_URL.to_string()
+                                    } else {
+                                        normalized
+                                    }
+                                };
+                                app.settings_base_url = normalized_base_url.clone();
+
+                                let models = App::get_available_models();
+                                let selected_idx = app.model_list_state.selected().unwrap_or(0).min(models.len().saturating_sub(1));
+                                let mut model = models[selected_idx].clone();
+
+                                if model.provider != "Custom" {
+                                    model.base_url = normalized_base_url.clone();
+                                    app.selected_model = Some(model);
                                 let _ = app.save_config();
-                                if app.selected_model.is_some() {
-                                    if app.initialize_model().is_ok() {
+                                    match app.initialize_model() {
+                                        Ok(_) => {
+                                            app.error = None;
                                         app.state = AppState::Chat;
+                                        }
+                                        Err(e) => {
+                                            app.error = Some(e.to_string());
+                                        }
                                     }
                                 } else {
-                                    app.previous_state = Some(AppState::Settings);
-                                    app.state = AppState::ModelSelector;
+                                    app.custom_base_url = normalized_base_url.clone();
+                                    app.selected_model = Some(model);
+                                    let _ = app.save_config();
+                                    app.state = AppState::CustomModel;
                                 }
                             },
-                            crossterm::event::KeyCode::Char(c) => app.settings_api_key.push(c),
-                            crossterm::event::KeyCode::Backspace => { app.settings_api_key.pop(); },
+                            crossterm::event::KeyCode::Char(c) => {
+                                match app.settings_field {
+                                    0 => app.settings_api_key.push(c),
+                                    1 => app.settings_base_url.push(c),
+                                    _ => {}
+                                }
+                            }
+                            crossterm::event::KeyCode::Backspace => {
+                                match app.settings_field {
+                                    0 => { app.settings_api_key.pop(); }
+                                    1 => { app.settings_base_url.pop(); }
+                                    _ => {}
+                                }
+                            }
                             _ => {}
                         }
                     },
@@ -810,7 +1087,7 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     render_header(f, app, layout[0]);
 
-    // Main area: special layout for Welcome to give logo space; others keep split view.
+    // Main area: special layout for Welcome to give logo space; Chat uses full width; others keep split view.
     match app.state {
         AppState::Welcome => {
             let main_chunks = Layout::default()
@@ -820,10 +1097,14 @@ fn ui(f: &mut Frame, app: &mut App) {
             render_messages(f, app, main_chunks[0]);
             render_welcome(f, app, main_chunks[1]);
         }
+        AppState::Chat => {
+            // Chat state uses full width - no right panel
+            render_messages(f, app, layout[1]);
+        }
         _ => {
             let main_chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
                 .split(layout[1]);
 
             render_messages(f, app, main_chunks[0]);
@@ -834,8 +1115,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                 AppState::Settings => render_settings(f, app, main_chunks[1]),
                 AppState::Help => render_help(f, app, main_chunks[1]),
                 AppState::CustomModel => render_custom_model(f, app, main_chunks[1]),
-                AppState::Chat => render_chat_panel(f, app, main_chunks[1]),
-                AppState::Welcome => unreachable!(),
+                AppState::Chat | AppState::Welcome => unreachable!(),
             }
         }
     }
@@ -971,7 +1251,7 @@ fn render_chat_panel(f: &mut Frame, app: &App, area: Rect) {
     let commands = vec![
         "/models - Select Model",
         "/agents - Select Agent",
-        "/settings - API Key",
+        "/settings - API key / model / base URL",
         "/help - Help",
         "/clear - Reset conversation",
     ];
@@ -1014,16 +1294,51 @@ fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
 // Helper functions
 fn render_command_hints(f: &mut Frame, app: &App, area: Rect) {
     let hints = app.get_command_hints();
+    
+    // If user has typed just "/" or it starts with "/", show all matching commands
+    // Filter commands that start with what the user has typed
     let filtered: Vec<ListItem> = hints.iter()
-        .filter(|(c, _)| c.starts_with(&app.chat_input))
-        .map(|(c, d)| ListItem::new(format!("{} - {}", c, d)))
+        .filter(|(c, _)| {
+            if app.chat_input == "/" {
+                // Show all commands when just "/" is typed
+                true
+            } else {
+                // Otherwise filter by what they've typed
+                c.starts_with(&app.chat_input)
+            }
+        })
+        .map(|(c, d)| {
+            ListItem::new(format!("{} - {}", c, d))
+        })
         .collect();
     
     if filtered.is_empty() { return; }
     
-    let height = filtered.len().min(5) as u16;
-    let popup_area = Rect { x: area.x, y: area.y.saturating_sub(height), width: area.width, height };
-    let list = List::new(filtered).block(Block::default().borders(Borders::ALL).style(Style::default().bg(Color::Black)));
+    // Show more commands when just "/" is typed, limit to 6 for better visibility
+    let max_height = if app.chat_input == "/" { 6 } else { 5 };
+    let height = filtered.len().min(max_height) as u16;
+    let popup_area = Rect { 
+        x: area.x, 
+        y: area.y.saturating_sub(height + 1), 
+        width: area.width, 
+        height: height + 1 
+    };
+    
+    let title = if app.chat_input == "/" {
+        "Available Commands (type to filter)"
+    } else {
+        "Commands"
+    };
+    
+    let list = List::new(filtered)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(Style::default().bg(Color::Rgb(30, 30, 30)).fg(Color::White))
+        )
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    
     f.render_widget(Clear, popup_area);
     f.render_widget(list, popup_area);
 }
@@ -1071,18 +1386,143 @@ fn render_agent_selector(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    let rect = centered_rect(60, 30, area);
+    let rect = centered_rect(60, 70, area);
     f.render_widget(Clear, rect);
-    let block = Block::default().borders(Borders::ALL).title("Settings");
-    let text = format!("API Key: {}\n(Type to edit, Enter to save)", "*".repeat(app.settings_api_key.len()));
-    let p = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
-    f.render_widget(p, rect);
 
-    let prefix = "API Key: ".len() as u16;
-    let cursor_x = (rect.x + 1 + prefix + app.settings_api_key.len() as u16)
-        .min(rect.x + rect.width.saturating_sub(1));
-    let cursor_y = rect.y + 1;
+    let block = Block::default().borders(Borders::ALL).title("Settings");
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),   // API key row
+            Constraint::Length(4),   // Base URL row
+            Constraint::Min(8),      // Model list
+            Constraint::Length(3),   // Selection summary
+            Constraint::Length(3),   // Footer / errors
+        ])
+        .split(inner);
+
+    let truncate = |s: &str, max_len: usize| -> String {
+        if s.len() > max_len {
+            format!("{}…", s.chars().take(max_len).collect::<String>())
+        } else {
+            s.to_string()
+        }
+    };
+
+    // API key block
+    let api_block = Block::default()
+        .borders(Borders::ALL)
+        .title(if app.settings_field == 0 { "API Key (active)" } else { "API Key" });
+    let masked_key = if app.settings_api_key.is_empty() {
+        "<not set>".to_string()
+    } else {
+        let visible_tail: String = app
+            .settings_api_key
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        let hidden_len = app.settings_api_key.len().saturating_sub(visible_tail.len());
+        format!("{}{}", "*".repeat(hidden_len), visible_tail)
+    };
+    let api_para = Paragraph::new(masked_key.clone())
+        .block(api_block)
+        .wrap(Wrap { trim: true });
+    f.render_widget(api_para, layout[0]);
+
+    // Base URL block
+    let url_block = Block::default()
+        .borders(Borders::ALL)
+        .title(if app.settings_field == 1 { "Base URL (active)" } else { "Base URL" });
+    let base_url = if app.settings_base_url.is_empty() {
+        DEFAULT_BASE_URL.to_string()
+    } else {
+        app.settings_base_url.clone()
+    };
+    let url_para = Paragraph::new(truncate(&base_url, 64))
+        .block(url_block)
+        .wrap(Wrap { trim: true });
+    f.render_widget(url_para, layout[1]);
+
+    // Model list
+    let models = App::get_available_models();
+    let items: Vec<ListItem> = models
+        .iter()
+        .map(|m| {
+            let caption = if m.provider == "Custom" {
+                format!("{} (custom)", m.name)
+            } else {
+                format!("{} - {}", m.name, m.provider)
+            };
+            ListItem::new(caption)
+        })
+        .collect();
+
+    let model_block = Block::default().borders(Borders::ALL).title("Models (↑/↓)");
+    let model_list = List::new(items)
+        .block(model_block)
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(model_list, layout[2], &mut app.model_list_state);
+
+    // Selection summary
+    let summary = {
+        let current = app
+            .selected_model
+            .as_ref()
+            .map(|m| format!("{} ({})", m.name, m.provider))
+            .unwrap_or_else(|| "None selected".to_string());
+        let base = truncate(&base_url, 48);
+        format!("Selected: {}  |  Base: {}", current, base)
+    };
+    let summary_para = Paragraph::new(summary)
+        .style(Style::default().fg(Color::Gray))
+        .wrap(Wrap { trim: true });
+    f.render_widget(summary_para, layout[3]);
+
+    // Footer / errors
+    let mut footer_lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("Tab", Style::default().fg(Color::Yellow)),
+            Span::raw("/"),
+            Span::styled("Shift+Tab", Style::default().fg(Color::Yellow)),
+            Span::raw(" move fields  "),
+            Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
+            Span::raw(" models  "),
+            Span::styled("Enter", Style::default().fg(Color::Yellow)),
+            Span::raw(" save  "),
+            Span::styled("Esc", Style::default().fg(Color::Yellow)),
+            Span::raw(" close"),
+        ]),
+    ];
+
+    if let Some(err) = &app.error {
+        footer_lines.push(Line::from(Span::styled(
+            format!("Error: {}", err),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    let footer = Paragraph::new(footer_lines).wrap(Wrap { trim: true });
+    f.render_widget(footer, layout[4]);
+
+    // Cursor placement for active field
+    if app.settings_field == 0 {
+        let cursor_x = (layout[0].x + 1 + masked_key.len() as u16)
+            .min(layout[0].x + layout[0].width.saturating_sub(1));
+        let cursor_y = layout[0].y + 1;
+        f.set_cursor_position((cursor_x, cursor_y));
+    } else if app.settings_field == 1 {
+        let cursor_x = (layout[1].x + 1 + base_url.len() as u16)
+            .min(layout[1].x + layout[1].width.saturating_sub(1));
+        let cursor_y = layout[1].y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 fn render_help(f: &mut Frame, _app: &App, area: Rect) {
@@ -1090,8 +1530,8 @@ fn render_help(f: &mut Frame, _app: &App, area: Rect) {
     let rect = centered_rect(60, 60, area);
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Help");
-    let text = "Commands:\n/models - Select Model\n/agents - Select Agent\n/settings - API Key\n\nNavigation:\nUse Arrows to navigate lists.\nEnter to select.\nEsc to go back.";
-    let p = Paragraph::new(text).block(block);
+    let text = "Available Commands:\n\n/models - Select Model\n/agents - Select Agent\n/settings - Configure API key / model / base URL\n/help - Show this help screen\n/clear - Clear conversation and reset agent\n\nNavigation:\nUse Arrows to navigate lists.\nEnter to select.\nEsc to go back.\n\nTip: Type '/' in the input to see all available commands.";
+    let p = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
     f.render_widget(p, rect);
 }
 

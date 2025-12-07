@@ -73,7 +73,7 @@ On first run, configure your API key and select a model:
 
 1. Press `/settings` to set your API key (OpenRouter API key)
 2. Press `/models` to select a model
-3. Press `/agents` to choose an agent type (Direct Chat, Coder, Code Researcher, Test Agent, or Pengy Agent)
+3. Press `/agents` to choose an agent type (Coder, Code Researcher, Test Agent, Control Agent, Issue Agent, or Pengy Agent)
 
 Configuration is saved to `.pengy_config.json` in the current directory. You can also set the `API_KEY` environment variable.
 

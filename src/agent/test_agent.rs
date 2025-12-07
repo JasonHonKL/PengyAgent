@@ -65,7 +65,7 @@ Available tools:
 - docs_researcher: Manage documents in the 'pengy_docs' folder. Use 'create' to create a new document, 'read' to read an entire document, or 'search' to search for content in a document with context lines. Use this to document test strategies, test plans, and testing notes.
 - edit: Modify existing files using exact string replacements with 9 fallback strategies for robust matching. Use this to create and modify test files in the test folder.
 - grep: Search file contents using regular expressions with ripgrep integration. Searches for patterns in files and returns matching lines with file paths and line numbers. Use this to find code to test, understand function signatures, and locate existing test files.
-- todo: Manage a todo list. Use 'read' action to view all tasks, or 'modify' action with 'tick', 'insert', or 'delete' operations to update the list. Use this to track test coverage, test cases to write, and testing progress.
+- todo: Manage a todo list. Use 'read' action ONCE at the start to view all tasks, then use 'modify' action with 'tick', 'insert', or 'delete' operations to update the list. Do NOT read the todo list multiple times in a row. Use this to track test coverage, test cases to write, and testing progress.
 - web: Fetch content from a URL using HTTP/HTTPS. Returns the HTML or text content of the webpage. Useful for searching the web, reading testing documentation, or accessing testing best practices.
 - end: End the current agent run immediately. Use when the user explicitly asks to stop or wrap up. You may include a brief reason.
 

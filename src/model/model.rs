@@ -24,6 +24,8 @@ pub mod model {
     pub struct Message{
         pub role:  Role,
         pub content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub reasoning_content: Option<String>,
     }
 
     // Vision API content types
@@ -169,6 +171,7 @@ pub mod model {
     pub struct ResponseMessage{
         pub role: String,
         pub content: Option<String>,
+        pub reasoning_content: Option<String>,
         pub tool_calls: Option<Vec<ToolCall>>,
     }
 
@@ -189,7 +192,19 @@ pub mod model {
 
     impl Message {
         pub fn new(role: Role, content: String) -> Self {
-            Self { role, content }
+            Self { 
+                role, 
+                content, 
+                reasoning_content: None,
+            }
+        }
+
+        pub fn new_with_reasoning(role: Role, content: String, reasoning_content: Option<String>) -> Self {
+            Self {
+                role,
+                content,
+                reasoning_content,
+            }
         }
     }
 
@@ -224,14 +239,59 @@ pub mod model {
             }
         }
 
+        fn is_reasoning_model(&self) -> bool {
+            // Heuristics for models that return/require reasoning_content (e.g. deepseek-r1, o1/o3)
+            let name = self.model_name.to_ascii_lowercase();
+            name.contains("reason") || name.contains("r1") || name.contains("/o1") || name.contains("/o3")
+        }
+
+        fn ensure_reasoning_messages(&self, messages: &mut [Message]) {
+            if !self.is_reasoning_model() {
+                return;
+            }
+
+            for msg in messages.iter_mut() {
+                if matches!(msg.role, Role::Assistant) && msg.reasoning_content.is_none() {
+                    msg.reasoning_content = Some(msg.content.clone());
+                }
+            }
+        }
+
+        fn completion_url(&self) -> String {
+            let trimmed = self.base_url.trim_end_matches('/');
+            if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/completions") {
+                trimmed.to_string()
+            } else {
+                format!("{}/chat/completions", trimmed)
+            }
+        }
+
+        fn embedding_url(&self) -> String {
+            let trimmed = self.base_url.trim_end_matches('/');
+            if trimmed.ends_with("/embeddings") {
+                trimmed.to_string()
+            } else if trimmed.ends_with("/chat/completions") || trimmed.ends_with("/completions") {
+                let root = trimmed
+                    .trim_end_matches("/chat/completions")
+                    .trim_end_matches("/completions")
+                    .trim_end_matches('/');
+                format!("{}/embeddings", root)
+            } else {
+                format!("{}/embeddings", trimmed)
+            }
+        }
+
         pub async fn complete(&self, mut messages: Vec<Message> , tools: Option<&[Box<dyn tool::ToolCall>]>) -> Result<Vec<Message> , Box<dyn Error + Send + Sync>>{
 
             let client = reqwest::Client::new();
-            let mut req_builder = client.request(reqwest::Method::POST, self.base_url.clone());
+            let mut req_builder = client.request(reqwest::Method::POST, self.completion_url());
+
+            let mut outbound_messages = messages.clone();
+            self.ensure_reasoning_messages(&mut outbound_messages);
 
             let mut body = RequestBody{
                 model: self.model_name.clone(),
-                messages: messages.clone(),
+                messages: outbound_messages,
                 tools: None,
             };
 
@@ -259,13 +319,27 @@ pub mod model {
             
             // Extract content from the first choice
             if let Some(choice) = response_json.choices.first() {
+                let reasoning_from_response = choice.message.reasoning_content.clone();
+
                 // Check if there are tool calls
                 if let Some(tool_calls) = &choice.message.tool_calls {
+                    // Track executed tool calls to prevent duplicates
+                    let mut executed_tool_calls = std::collections::HashSet::new();
+                    
                     // Execute tool calls
                     for tool_call in tool_calls {
                         if let Some(tools_slice) = tools {
                             // Find the tool by name
                             if let Some(tool) = tools_slice.iter().find(|t| t.name() == tool_call.function.name) {
+                                // Create a unique identifier for this tool call to prevent duplicates
+                                let tool_call_id = format!("{}:{}", tool_call.function.name, tool_call.function.arguments);
+                                
+                                // Skip if we've already executed this exact tool call
+                                if executed_tool_calls.contains(&tool_call_id) {
+                                    continue;
+                                }
+                                executed_tool_calls.insert(tool_call_id);
+                                
                                 // Execute the tool with 120 second timeout
                                 let tool_name = tool_call.function.name.clone();
                                 let arguments = tool_call.function.arguments.clone();
@@ -318,8 +392,20 @@ pub mod model {
                                     Err(e) => format!("Tool error: {}", e),
                                 };
                                 
-                                // Add assistant message with tool call (include arguments)
-                                messages.push(Message::new(Role::Assistant, format!("Tool call: {} with arguments: {}", tool_name, arguments)));
+                                // Add assistant message with tool call using JSON format for robustness
+                                // Format: "Tool call: {\"name\":\"tool_name\",\"arguments\":\"...\"}"
+                                // Note: arguments is already a JSON string, so we include it as a string value
+                                // This avoids double-encoding issues
+                                let tool_call_json = serde_json::json!({
+                                    "name": tool_name,
+                                    "arguments": arguments
+                                }).to_string();
+                                
+                                let mut assistant_tool_msg = Message::new(Role::Assistant, format!("Tool call: {}", tool_call_json));
+                                if self.is_reasoning_model() {
+                                    assistant_tool_msg.reasoning_content = Some(reasoning_from_response.clone().unwrap_or_else(|| assistant_tool_msg.content.clone()));
+                                }
+                                messages.push(assistant_tool_msg);
                                 
                                 // Add tool result message
                                 messages.push(Message::new(Role::User, format!("Tool result: {}", result_str)));
@@ -330,7 +416,13 @@ pub mod model {
                     return Ok(messages);
                 } else if let Some(content) = &choice.message.content {
                     // Regular response with content
-                    messages.push(Message::new(Role::Assistant, content.clone()));
+                    let mut assistant_msg = Message::new(Role::Assistant, content.clone());
+                    if self.is_reasoning_model() {
+                        assistant_msg.reasoning_content = Some(reasoning_from_response.unwrap_or_else(|| content.clone()));
+                    } else {
+                        assistant_msg.reasoning_content = reasoning_from_response;
+                    }
+                    messages.push(assistant_msg);
                     return Ok(messages);
                 }
             }
@@ -417,7 +509,7 @@ pub mod model {
             let json_body = serde_json::to_vec(&body)?;
 
             let response = client
-                .request(reqwest::Method::POST, self.base_url.clone())
+                .request(reqwest::Method::POST, self.completion_url())
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .body(json_body)
@@ -446,9 +538,7 @@ pub mod model {
         pub async fn completion_open_router_embedding(&self, input: String) -> Result<Vec<f64>, Box<dyn Error + Send + Sync>> {
             let client = reqwest::Client::new();
             
-            // Construct embeddings endpoint URL from base_url
-            // OpenRouter embeddings endpoint: https://openrouter.ai/api/v1/embeddings
-            let embeddings_url = self.base_url.replace("/chat/completions", "/embeddings");
+            let embeddings_url = self.embedding_url();
             
             let body = EmbeddingRequestBody {
                 model: self.model_name.clone(),

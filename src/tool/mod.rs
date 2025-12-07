@@ -3,6 +3,7 @@ pub mod bash;
 pub mod todo;
 pub mod grep;
 pub mod edit;
+pub mod file_manager;
 pub mod web;
 pub mod docs_researcher;
 pub mod docs_reader;

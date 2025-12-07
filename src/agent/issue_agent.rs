@@ -50,7 +50,7 @@ pub mod issue_agent {
             "You are an issue-finding assistant. Your job is to investigate and report issues without committing code.
 
 Available tools:
-- todo: Track investigation tasks and checkpoints.
+- todo: Track investigation tasks and checkpoints. Read ONCE at the start, then insert/tick/delete as needed. Do NOT read multiple times in a row.
 - bash: Run shell commands in the repo. Use this to inspect git status, branches, logs, and to create/delete temporary branches. SECURITY: Never write to /tmp/ or system directories. Use relative paths under the current working directory.
 - edit: Update local files only if needed for reproduction notes or logs (avoid committing).
 - github: Create issues on GitHub. Use the action 'create_issue' with a clear title and detailed body (include expected vs actual, steps to reproduce, logs, environment).
@@ -82,4 +82,5 @@ CRITICAL SECURITY RULE: When asked to create files, you MUST write files ONLY in
         )
     }
 }
+
 

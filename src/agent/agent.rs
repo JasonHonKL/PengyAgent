@@ -1,6 +1,7 @@
 pub mod agent {
     use crate::model::model::model::{Model, Message, Role};
     use crate::tool::tool::tool::ToolCall;
+    use serde_json;
 
     #[derive(Clone, Debug)]
     pub enum AgentEvent {
@@ -132,22 +133,157 @@ pub mod agent {
                             // Check if we got tool calls or final response
                             // Look for tool call messages (they come in pairs: Assistant with "Tool call:" then User with "Tool result:")
                             let mut found_tool_call = false;
+                            
                             for msg in messages.iter().rev() {
                                 if matches!(msg.role, Role::Assistant) && msg.content.starts_with("Tool call:") {
                                     // Tool was called, extract and display tool info
                                     if let Some(tool_info) = msg.content.strip_prefix("Tool call: ") {
-                                        // Try to parse tool name and args
+                                        // Try to parse as JSON first (new format) with robust error handling
+                                        let (tool_name, args, parse_success) = match serde_json::from_str::<serde_json::Value>(tool_info.trim()) {
+                                            Ok(json) => {
+                                                // New JSON format: {"name":"...","arguments":"..."}
+                                                let name = json.get("name")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("unknown")
+                                                    .to_string();
+                                                
+                                                // Handle arguments - it's stored as a JSON string, so extract it as a string
+                                                // The arguments field contains a JSON string that may be escaped
+                                                let args = json.get("arguments")
+                                                    .and_then(|v| {
+                                                        // If it's a string, use it directly (it's already a JSON string)
+                                                        if let Some(s) = v.as_str() {
+                                                            Some(s.to_string())
+                                                        } else {
+                                                            // If it's an object/array, serialize it back to JSON string
+                                                            serde_json::to_string(v).ok()
+                                                        }
+                                                    })
+                                                    .unwrap_or_default();
+                                                
+                                                (name, args, true)
+                                            }
+                                            Err(_e) => {
+                                                // JSON parsing failed - try fallback methods
+                                                
+                                                // Method 1: Try old format
                                         if let Some((name, args)) = tool_info.split_once(" with arguments: ") {
-                                            callback(AgentEvent::ToolCall { 
-                                                tool_name: name.to_string(), 
-                                                args: args.to_string() 
-                                            });
+                                                    (name.to_string(), args.to_string(), false)
+                                                } else {
+                                                    // Method 2: Try to extract name and arguments using string manipulation
+                                                    // Look for "name":"value" and "arguments":"value" patterns
+                                                    let mut extracted_name = String::new();
+                                                    let mut extracted_args = String::new();
+                                                    
+                                                    // Extract name
+                                                    if let Some(name_idx) = tool_info.find("\"name\"") {
+                                                        let after_name = &tool_info[name_idx + 6..];
+                                                        if let Some(colon_idx) = after_name.find(':') {
+                                                            let value_part = &after_name[colon_idx + 1..].trim_start();
+                                                            if value_part.starts_with('"') {
+                                                                // Find the closing quote, handling escaped quotes
+                                                                let chars = value_part[1..].char_indices();
+                                                                let mut end_idx = 0;
+                                                                let mut escaped = false;
+                                                                
+                                                                for (i, ch) in chars {
+                                                                    if escaped {
+                                                                        escaped = false;
+                                                                        continue;
+                                                                    }
+                                                                    if ch == '\\' {
+                                                                        escaped = true;
+                                                                        continue;
+                                                                    }
+                                                                    if ch == '"' {
+                                                                        end_idx = i;
+                                                                        break;
+                                                                    }
+                                                                }
+                                                                
+                                                                if end_idx > 0 {
+                                                                    extracted_name = value_part[1..end_idx + 1].to_string();
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    
+                                                    // Extract arguments (similar logic)
+                                                    if let Some(args_idx) = tool_info.find("\"arguments\"") {
+                                                        let after_args = &tool_info[args_idx + 11..];
+                                                        if let Some(colon_idx) = after_args.find(':') {
+                                                            let value_part = &after_args[colon_idx + 1..].trim_start();
+                                                            if value_part.starts_with('"') {
+                                                                // Find the closing quote, handling escaped quotes and nested JSON
+                                                                let chars = value_part[1..].char_indices();
+                                                                let mut end_idx = 0;
+                                                                let mut escaped = false;
+                                                                let mut depth = 0;
+                                                                
+                                                                for (i, ch) in chars {
+                                                                    if escaped {
+                                                                        escaped = false;
+                                                                        continue;
+                                                                    }
+                                                                    if ch == '\\' {
+                                                                        escaped = true;
+                                                                        continue;
+                                                                    }
+                                                                    if ch == '{' || ch == '[' {
+                                                                        depth += 1;
+                                                                    } else if ch == '}' || ch == ']' {
+                                                                        depth -= 1;
+                                                                    } else if ch == '"' && depth == 0 {
+                                                                        end_idx = i;
+                                                                        break;
+                                                                    }
+                                                                }
+                                                                
+                                                                if end_idx > 0 {
+                                                                    extracted_args = value_part[1..end_idx + 1].to_string();
+                                                                } else {
+                                                                    // If we didn't find a closing quote, try to extract until the next comma or }
+                                                                    if let Some(comma_idx) = value_part[1..].find(',') {
+                                                                        extracted_args = value_part[1..comma_idx + 1].to_string();
+                                                                    } else if let Some(brace_idx) = value_part[1..].find('}') {
+                                                                        extracted_args = value_part[1..brace_idx + 1].to_string();
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    
+                                                    if !extracted_name.is_empty() {
+                                                        (extracted_name, extracted_args, false)
+                                                    } else {
+                                                        // Last resort: try to find any tool name pattern
+                                                        // Look for common tool names in the string
+                                                        let known_tools = ["bash", "file_manager", "web", "todo", "end", "grep", "vector_search"];
+                                                        let found_tool = known_tools.iter()
+                                                            .find(|tool| tool_info.contains(*tool))
+                                                            .map(|s| s.to_string());
+                                                        
+                                                        if let Some(tool) = found_tool {
+                                                            (tool, String::new(), false)
                                         } else {
-                                             callback(AgentEvent::ToolCall { 
-                                                tool_name: tool_info.to_string(), 
-                                                args: "".to_string() 
-                                            });
+                                                            // Really can't parse - return unknown but log error
+                                                            eprintln!("Critical: Could not parse tool call: {}", tool_info);
+                                                            ("unknown".to_string(), String::new(), false)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        };
+                                        
+                                        // If parsing failed, log warning for debugging
+                                        if !parse_success {
+                                            eprintln!("Tool call parsing warning - tool: {}, args: {}", tool_name, args);
                                         }
+                                        
+                                        callback(AgentEvent::ToolCall { 
+                                            tool_name, 
+                                            args 
+                                        });
                                     }
                                     found_tool_call = true;
                                     break;
@@ -155,24 +291,58 @@ pub mod agent {
                             }
                             
                             // Find the tool result message to show the result
+                            // Also check if this tool call was actually executed (has a tool result)
                             if found_tool_call {
                                 let mut tool_name: Option<String> = None;
                                 let mut tool_result: Option<String> = None;
+                                let mut tool_was_executed = false;
                                 
                                 // Find the tool call and result
                                 for msg in messages.iter().rev() {
                                     if matches!(msg.role, Role::User) && msg.content.starts_with("Tool result: ") {
                                         let result = msg.content.strip_prefix("Tool result: ").unwrap_or(&msg.content);
                                         tool_result = Some(result.to_string());
+                                        tool_was_executed = true;
                                         callback(AgentEvent::ToolResult { result: result.to_string() });
                                     }
                                     if matches!(msg.role, Role::Assistant) && msg.content.starts_with("Tool call: ") {
                                         if let Some(tool_info) = msg.content.strip_prefix("Tool call: ") {
+                                            // Try to parse as JSON first (new format) with robust error handling
+                                            tool_name = match serde_json::from_str::<serde_json::Value>(tool_info.trim()) {
+                                                Ok(json) => {
+                                                    // New JSON format
+                                                    json.get("name")
+                                                        .and_then(|v| v.as_str())
+                                                        .map(|s| s.to_string())
+                                                }
+                                                Err(_) => {
+                                                    // Fallback to old format
                                             if let Some((name, _)) = tool_info.split_once(" with arguments: ") {
-                                                tool_name = Some(name.to_string());
+                                                        Some(name.to_string())
+                                                    } else {
+                                                        // Try to extract name from malformed JSON
+                                                        if let Some(name_idx) = tool_info.find("\"name\"") {
+                                                            let after_name = &tool_info[name_idx + 6..];
+                                                            if let Some(colon_idx) = after_name.find(':') {
+                                                                let value_part = &after_name[colon_idx + 1..].trim_start();
+                                                                if value_part.starts_with('"') {
+                                                                    if let Some(end_idx) = value_part[1..].find('"') {
+                                                                        Some(value_part[1..end_idx + 1].to_string())
+                                                                    } else {
+                                                                        Some("unknown".to_string())
+                                                                    }
+                                                                } else {
+                                                                    Some("unknown".to_string())
+                                                                }
+                                                            } else {
+                                                                Some("unknown".to_string())
+                                                            }
                                             } else {
-                                                tool_name = Some(tool_info.to_string());
+                                                            Some(tool_info.to_string())
+                                                        }
+                                                    }
                                             }
+                                            };
                                         }
                                         break;
                                     }
@@ -211,22 +381,116 @@ pub mod agent {
                                         Err(e) => {
                                             callback(AgentEvent::Error { error: format!("Failed to summarize conversation: {}", e) });
                                             // Continue with original messages
-                                            self.messages = messages;
+                                            self.messages = messages.clone();
                                         }
                                     }
-                                } else {
-                                    self.messages = messages;
+                                } else if tool_was_executed {
+                                    // Tool was executed, just update messages
+                                    self.messages = messages.clone();
                                 }
+                                
+                                // If tool was already executed (has tool result), we're done with this iteration
+                                if tool_was_executed {
+                                    break Ok(());
+                                }
+                                
+                                // If tool was NOT executed (no tool result), fall through to text-based execution below
+                                eprintln!("DEBUG: Tool call found but not executed, will execute as text-based tool call");
+                            }
+                            
+                            // Check if the model returned a text-based tool call that wasn't executed
+                            // (Sometimes models return "Tool call: {JSON}" as text instead of using the API's tool_calls feature)
+                            if let Some(last_msg) = messages.last() {
+                                let content_trimmed = last_msg.content.trim();
+                                if matches!(last_msg.role, Role::Assistant) && content_trimmed.starts_with("Tool call:") {
+                                    eprintln!("DEBUG: Detected text-based tool call in assistant message");
+                                    eprintln!("DEBUG: Full content (first 200 chars): {}", &last_msg.content[..last_msg.content.len().min(200)]);
+                                    // This is a text-based tool call that needs to be executed manually
+                                    if let Some(tool_info) = content_trimmed.strip_prefix("Tool call: ") {
+                                        eprintln!("DEBUG: Tool info: {}", &tool_info[..tool_info.len().min(100)]);
+                                        // Try to parse and execute the tool call
+                                        match serde_json::from_str::<serde_json::Value>(tool_info.trim()) {
+                                            Ok(json) => {
+                                                eprintln!("DEBUG: Successfully parsed tool call JSON");
+                                                let tool_name = json.get("name")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("unknown");
+                                                let arguments = json.get("arguments")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
+                                                
+                                                eprintln!("DEBUG: Tool name: {}, arguments length: {}", tool_name, arguments.len());
+                                                
+                                                // Find and execute the tool
+                                                if let Some(tool) = tools_slice.and_then(|tools| tools.iter().find(|t| t.name() == tool_name)) {
+                                                    eprintln!("DEBUG: Found tool {}, executing...", tool_name);
+                                                    callback(AgentEvent::ToolCall { 
+                                                        tool_name: tool_name.to_string(), 
+                                                        args: arguments.to_string() 
+                                                    });
+                                                    
+                                                    match tool.run(arguments) {
+                                                        Ok(result) => {
+                                                            eprintln!("DEBUG: Tool execution succeeded");
+                                                            callback(AgentEvent::ToolResult { result: result.clone() });
+                                                            // Add the tool result message and update self.messages
+                                                            let mut updated_messages = messages.clone();
+                                                            updated_messages.push(Message::new(Role::User, format!("Tool result: {}", result)));
+                                                            self.messages = updated_messages;
+                                                            break Ok(());
+                                                        }
+                                                        Err(e) => {
+                                                            eprintln!("DEBUG: Tool execution failed: {}", e);
+                                                            let error_result = format!("Tool error: {}", e);
+                                                            callback(AgentEvent::ToolResult { result: error_result.clone() });
+                                                            let mut updated_messages = messages.clone();
+                                                            updated_messages.push(Message::new(Role::User, format!("Tool result: {}", error_result)));
+                                                            self.messages = updated_messages;
+                                                            break Ok(());
+                                                        }
+                                                    }
+                                                } else {
+                                                    eprintln!("DEBUG: Tool '{}' not found in tools list", tool_name);
+                                                    // Tool not found
+                                                    let error_result = format!("Tool error: Tool '{}' not found", tool_name);
+                                                    callback(AgentEvent::ToolResult { result: error_result.clone() });
+                                                    let mut updated_messages = messages.clone();
+                                                    updated_messages.push(Message::new(Role::User, format!("Tool result: {}", error_result)));
+                                                    self.messages = updated_messages;
+                                                    break Ok(());
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("DEBUG: Failed to parse tool call JSON: {}", e);
+                                                // Failed to parse - treat as malformed tool call
+                                                let error_result = format!("Tool error: Failed to parse tool call JSON: {}", e);
+                                                callback(AgentEvent::ToolResult { result: error_result.clone() });
+                                                let mut updated_messages = messages.clone();
+                                                updated_messages.push(Message::new(Role::User, format!("Tool result: {}", error_result)));
+                                                self.messages = updated_messages;
                                 break Ok(());
+                                            }
+                                        }
+                                    } else {
+                                        eprintln!("DEBUG: Could not strip 'Tool call: ' prefix");
+                                    }
+                                } else {
+                                    eprintln!("DEBUG: Last message is not a tool call. Role: {:?}, starts_with Tool call: {}", 
+                                        last_msg.role, 
+                                        last_msg.content.starts_with("Tool call:"));
+                                }
                             }
                             
                             // Check for final response
                             if let Some(last_msg) = messages.last() {
-                                if matches!(last_msg.role, Role::Assistant) && !last_msg.content.starts_with("Tool call:") {
+                                let content_trimmed = last_msg.content.trim();
+                                if matches!(last_msg.role, Role::Assistant) && !content_trimmed.starts_with("Tool call:") {
                                     // Final response
                                     self.messages = messages.clone();
                                     callback(AgentEvent::FinalResponse { content: last_msg.content.clone() });
                                     return;
+                                } else if matches!(last_msg.role, Role::Assistant) && content_trimmed.starts_with("Tool call:") {
+                                    eprintln!("DEBUG: Final response check detected tool call, should not show as final response");
                                 }
                             }
                             
@@ -251,18 +515,28 @@ pub mod agent {
                 }
 
                 // Check if we need to continue (tool was called) or we're done
+                // After a tool call execution, messages will be: Assistant "Tool call: ..." followed by User "Tool result: ..."
+                // We need to continue the loop to get the model's response to the tool result
                 if let Some(last_msg) = self.messages.last() {
-                    if matches!(last_msg.role, Role::Assistant) {
-                        if last_msg.content.starts_with("Tool call:") {
-                            // Tool was called, continue to next step
+                    // If last message is a tool result, a tool was just executed - continue to get model's response
+                    if matches!(last_msg.role, Role::User) && last_msg.content.starts_with("Tool result: ") {
+                        continue;
+                    }
+                    
+                    // If last message is Assistant with tool call, tool was called but result not added yet - continue
+                    if matches!(last_msg.role, Role::Assistant) && last_msg.content.starts_with("Tool call:") {
                             continue;
-                        } else {
-                            // Final response, we're done
+                    }
+                    
+                    // If last message is Assistant without tool call, it's a final response - we're done
+                    if matches!(last_msg.role, Role::Assistant) && !last_msg.content.starts_with("Tool call:") {
                             callback(AgentEvent::FinalResponse { content: last_msg.content.clone() });
                             return;
-                        }
                     }
                 }
+                
+                // Default: continue the loop (might be waiting for model response or tool execution)
+                continue;
             }
 
             if step >= self.max_step {

@@ -1611,6 +1611,7 @@ dependencies = [
  "screenshots",
  "serde",
  "serde_json",
+ "tempfile",
  "textwrap",
  "tokio",
  "tui-textarea",

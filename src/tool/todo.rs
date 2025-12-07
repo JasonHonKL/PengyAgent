@@ -3,9 +3,13 @@ pub mod todo {
     use std::sync::{Mutex, Arc};
     use serde_json;
     use std::error::Error;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
 
-    #[derive(Debug, Clone)]
+    const TODO_FILE: &str = ".pengy_todo.json";
+
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
     struct TodoTask {
         description: String,
         completed: bool,
@@ -14,6 +18,7 @@ pub mod todo {
     pub struct TodoTool {
         tool: Tool,
         state: Arc<Mutex<Vec<TodoTask>>>,
+        file_path: PathBuf,
     }
 
     impl TodoTool {
@@ -72,17 +77,52 @@ pub mod todo {
                 required: vec!["action".to_string()],
             };
 
+            // Determine file path for persistence (cwd)
+            let file_path = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join(TODO_FILE);
+
+            let initial_state = Self::load_state(&file_path).unwrap_or_default();
+
             Self {
                 tool,
-                state: Arc::new(Mutex::new(Vec::new())),
+                state: Arc::new(Mutex::new(initial_state)),
+                file_path,
             }
         }
 
+        fn load_state(path: &Path) -> Result<Vec<TodoTask>, Box<dyn Error>> {
+            if path.exists() {
+                let content = fs::read_to_string(path)?;
+                if content.trim().is_empty() {
+                    return Ok(Vec::new());
+                }
+                let tasks: Vec<TodoTask> = serde_json::from_str(&content).unwrap_or_default();
+                Ok(tasks)
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        fn save_state(&self, tasks: &[TodoTask]) -> Result<(), Box<dyn Error>> {
+            let json = serde_json::to_string_pretty(tasks)?;
+            fs::write(&self.file_path, json)?;
+            Ok(())
+        }
+
         fn read_tasks(&self) -> Result<String, Box<dyn Error>> {
+            // Refresh from disk in case another session updated it
+            {
+                let mut state_guard = self.state.lock().unwrap();
+                if let Ok(disk_state) = Self::load_state(&self.file_path) {
+                    *state_guard = disk_state;
+                }
+            }
+
             let state_guard = self.state.lock().unwrap();
             
             if state_guard.is_empty() {
-                return Ok("Todo list is empty.".to_string());
+                return Ok("Todo list is empty. Use 'modify' action with 'insert' operation to add tasks.".to_string());
             }
 
             let mut result = String::from("Current todo list:\n");
@@ -90,6 +130,11 @@ pub mod todo {
                 let status = if task.completed { "✓" } else { " " };
                 result.push_str(&format!("{}. [{}] {}\n", idx, status, task.description));
             }
+            
+            // Add summary to help agent understand state
+            let completed_count = state_guard.iter().filter(|t| t.completed).count();
+            let total_count = state_guard.len();
+            result.push_str(&format!("\nSummary: {} of {} tasks completed.", completed_count, total_count));
 
             Ok(result.trim().to_string())
         }
@@ -126,17 +171,20 @@ pub mod todo {
                     };
 
                     // Check if position is provided
-                    if let Some(position) = args.get("position").and_then(|v| v.as_u64()) {
+                    let result_msg = if let Some(position) = args.get("position").and_then(|v| v.as_u64()) {
                         let pos = position as usize;
                         if pos > state_guard.len() {
                             return Err(format!("Position {} is out of range. There are {} tasks. Use position <= {} to insert.", pos, state_guard.len(), state_guard.len()).into());
                         }
                         state_guard.insert(pos, new_task);
-                        Ok(format!("Task inserted at position {}.", pos))
+                        format!("Task inserted at position {}. Continue with the next step.", pos)
                     } else {
+                        let pos = state_guard.len();
                         state_guard.push(new_task);
-                        Ok(format!("Task added to the end of the list (position {}).", state_guard.len() - 1))
-                    }
+                        format!("Task added to the end of the list (position {}). Continue with the next step.", pos)
+                    };
+                    
+                    Ok(result_msg)
                 }
                 "delete" => {
                     let task_id = args.get("task_id")
@@ -152,6 +200,11 @@ pub mod todo {
                 }
                 _ => Err(format!("Unknown operation: {}. Must be 'tick', 'insert', or 'delete'.", operation).into())
             }
+            .and_then(|msg| {
+                // Persist after mutation
+                self.save_state(&state_guard)?;
+                Ok(msg)
+            })
         }
     }
 
