@@ -39,7 +39,7 @@ pub mod todo {
             operation_items.insert("type".to_string(), "string".to_string());
             parameters.insert("operation".to_string(), Parameter {
                 items: operation_items,
-                description: "The operation to perform when action is 'modify': 'tick' to mark a task as completed, 'insert' to add a new task, or 'delete' to remove a task. Required when not using the 'operations' array.".to_string(),
+                description: "The operation to perform when action is 'modify': 'tick' to mark a task as completed, 'insert' to add one or more tasks (use 'task_descriptions' array for multiple), or 'delete' to remove a task. Required when not using the 'operations' array.".to_string(),
                 enum_values: Some(vec!["tick".to_string(), "insert".to_string(), "delete".to_string()]),
             });
 
@@ -52,12 +52,22 @@ pub mod todo {
                 enum_values: None,
             });
 
-            // task_description parameter (for insert operation)
+            // task_description parameter (for insert operation - single task)
             let mut task_desc_items = HashMap::new();
             task_desc_items.insert("type".to_string(), "string".to_string());
             parameters.insert("task_description".to_string(), Parameter {
                 items: task_desc_items,
-                description: "The description of the task to insert. Required for 'insert' operation.".to_string(),
+                description: "The description of a single task to insert. Use this OR 'task_descriptions' array for multiple tasks. Required for 'insert' operation when not using 'task_descriptions'.".to_string(),
+                enum_values: None,
+            });
+
+            // task_descriptions parameter (for insert operation - multiple tasks)
+            let mut task_descs_items = HashMap::new();
+            task_descs_items.insert("type".to_string(), "array".to_string());
+            task_descs_items.insert("item_type".to_string(), "string".to_string());
+            parameters.insert("task_descriptions".to_string(), Parameter {
+                items: task_descs_items,
+                description: "Array of task descriptions to insert multiple tasks at once. Use this to insert multiple tasks efficiently. If provided, 'task_description' is ignored. All tasks will be inserted at the same position (or appended if no position specified).".to_string(),
                 enum_values: None,
             });
 
@@ -82,7 +92,7 @@ pub mod todo {
 
             let tool = Tool {
                 name: "todo".to_string(),
-                description: "Manage a todo list. Use 'read' action to view all tasks, or 'modify' action with 'tick', 'insert', or 'delete' operations to update the list. Supports batch updates via the 'operations' array.".to_string(),
+                description: "Manage a todo list. Use 'read' action to view all tasks, or 'modify' action with 'tick', 'insert', or 'delete' operations to update the list. IMPORTANT: You can insert multiple tasks at once by using 'task_descriptions' (array) instead of 'task_description' (string). Supports batch updates via the 'operations' array.".to_string(),
                 parameters,
                 required: vec!["action".to_string()],
             };
@@ -169,27 +179,59 @@ pub mod todo {
                     Ok(format!("Task {} marked as {}.", task_id, status))
                 }
                 "insert" => {
-                    let task_description = args.get("task_description")
-                        .and_then(|v| v.as_str())
-                        .ok_or("Missing required parameter: task_description (required for 'insert' operation)")?;
-
-                    let new_task = TodoTask {
-                        description: task_description.to_string(),
-                        completed: false,
+                    // Support both single task and multiple tasks insertion
+                    let task_descriptions: Vec<String> = if let Some(descs_array) = args.get("task_descriptions").and_then(|v| v.as_array()) {
+                        // Multiple tasks via task_descriptions array
+                        descs_array.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    } else if let Some(desc) = args.get("task_description").and_then(|v| v.as_str()) {
+                        // Single task via task_description
+                        vec![desc.to_string()]
+                    } else {
+                        return Err("Missing required parameter: either 'task_description' (single task) or 'task_descriptions' (array of tasks) is required for 'insert' operation.".into());
                     };
 
+                    if task_descriptions.is_empty() {
+                        return Err("At least one task description is required for 'insert' operation.".into());
+                    }
+
                     // Check if position is provided
-                    let result_msg = if let Some(position) = args.get("position").and_then(|v| v.as_u64()) {
-                        let pos = position as usize;
+                    let insert_position = args.get("position").and_then(|v| v.as_u64()).map(|p| p as usize);
+                    
+                    let mut inserted_positions = Vec::new();
+                    let base_pos = if let Some(pos) = insert_position {
                         if pos > tasks.len() {
                             return Err(format!("Position {} is out of range. There are {} tasks. Use position <= {} to insert.", pos, tasks.len(), tasks.len()).into());
                         }
-                        tasks.insert(pos, new_task);
-                        format!("Task inserted at position {}. Continue with the next step.", pos)
+                        pos
                     } else {
-                        let pos = tasks.len();
-                        tasks.push(new_task);
-                        format!("Task added to the end of the list (position {}). Continue with the next step.", pos)
+                        tasks.len()
+                    };
+
+                    // Insert tasks in reverse order to maintain user-specified order
+                    // (inserting at the same position multiple times requires reverse order)
+                    for desc in task_descriptions.iter().rev() {
+                        let new_task = TodoTask {
+                            description: desc.clone(),
+                            completed: false,
+                        };
+                        tasks.insert(base_pos, new_task);
+                    }
+                    
+                    // Record the final positions after all inserts
+                    for idx in 0..task_descriptions.len() {
+                        inserted_positions.push(base_pos + idx);
+                    }
+
+                    let result_msg = if task_descriptions.len() == 1 {
+                        format!("Task inserted at position {}. Continue with the next step.", inserted_positions[0])
+                    } else {
+                        format!("{} tasks inserted starting at position {} (positions {} to {}). Continue with the next step.", 
+                            task_descriptions.len(), 
+                            inserted_positions[0],
+                            inserted_positions[0],
+                            inserted_positions.last().unwrap())
                     };
                     
                     Ok(result_msg)

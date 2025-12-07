@@ -118,6 +118,7 @@ struct App {
     settings_base_url: String,
     settings_field: usize,
     search_query: String,
+    model_search_focused: bool,  // Track if search field is focused in model selector
     show_command_hints: bool,
     custom_model_name: String,
     custom_base_url: String,
@@ -226,6 +227,7 @@ impl App {
             settings_base_url,
             settings_field: 0,
             search_query: String::new(),
+            model_search_focused: false,
             show_command_hints: false,
             custom_model_name,
             custom_base_url,
@@ -444,6 +446,37 @@ impl App {
                 name: "z-ai/glm-4.6".to_string(),
                 provider: "GLM".to_string(),
                 base_url: DEFAULT_BASE_URL.to_string(),
+            },
+            // Provider Base URLs (for easy selection)
+            ModelOption {
+                name: "Provider: Mistral".to_string(),
+                provider: "Mistral".to_string(),
+                base_url: "https://api.mistral.ai/v1".to_string(),
+            },
+            ModelOption {
+                name: "Provider: DeepSeek".to_string(),
+                provider: "DeepSeek".to_string(),
+                base_url: "https://api.deepseek.com/v1".to_string(),
+            },
+            ModelOption {
+                name: "Provider: OpenRouter".to_string(),
+                provider: "OpenRouter".to_string(),
+                base_url: "https://openrouter.ai/api/v1".to_string(),
+            },
+            ModelOption {
+                name: "Provider: OpenAI (ChatGPT)".to_string(),
+                provider: "OpenAI".to_string(),
+                base_url: "https://api.openai.com/v1".to_string(),
+            },
+            ModelOption {
+                name: "Provider: Anthropic (Claude)".to_string(),
+                provider: "Anthropic".to_string(),
+                base_url: "https://api.anthropic.com/v1".to_string(),
+            },
+            ModelOption {
+                name: "Provider: GLM".to_string(),
+                provider: "GLM".to_string(),
+                base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
             },
             // Custom Model
             ModelOption {
@@ -694,7 +727,7 @@ impl App {
                     // This avoids showing "running" state and duplication
                     if let Some((tool_id, name, args_str)) = self.pending_tool_calls.pop() {
                         // Create tool call message directly with success status
-                        self.chat_messages.push(ChatMessage::ToolCall {
+                    self.chat_messages.push(ChatMessage::ToolCall {
                             id: tool_id.clone(),
                             name: name.clone(),
                             args: args_str.clone(),
@@ -995,6 +1028,8 @@ fn handle_command_inline(app: &mut App, cmd: &str, previous_state: AppState) {
     if cmd.starts_with("/models") {
         app.previous_state = Some(previous_state);
                                         app.state = AppState::ModelSelector;
+        app.model_search_focused = true;  // Default to search active
+        app.search_query.clear();
     } else if cmd.starts_with("/agents") {
         app.previous_state = Some(previous_state);
                                         app.state = AppState::AgentSelector;
@@ -1102,13 +1137,68 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     AppState::ModelSelector => {
                         match key.code {
-                            crossterm::event::KeyCode::Esc => app.state = app.previous_state.clone().unwrap_or(AppState::Welcome),
+                            crossterm::event::KeyCode::Esc => {
+                                if app.model_search_focused {
+                                    app.model_search_focused = false;
+                                    app.search_query.clear();
+                                } else {
+                                    app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
+                                }
+                            },
+                            crossterm::event::KeyCode::Tab => {
+                                app.model_search_focused = !app.model_search_focused;
+                                if !app.model_search_focused {
+                                    // Reset selection when switching back to list
+                                    let all_models = App::get_available_models();
+                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                        all_models.iter().collect()
+                                    } else {
+                                        let query_lower = app.search_query.to_lowercase();
+                                        all_models.iter()
+                                            .filter(|m| {
+                                                m.name.to_lowercase().contains(&query_lower) ||
+                                                m.provider.to_lowercase().contains(&query_lower) ||
+                                                m.base_url.to_lowercase().contains(&query_lower)
+                                            })
+                                            .collect()
+                                    };
+                                    if !filtered.is_empty() {
+                                        app.model_list_state.select(Some(0));
+                                    }
+                                }
+                            },
                             crossterm::event::KeyCode::Enter => {
-                                let models = App::get_available_models();
+                                if app.model_search_focused {
+                                    // Switch to list on Enter in search
+                                    app.model_search_focused = false;
+                                } else {
+                                    // Get filtered models
+                                    let all_models = App::get_available_models();
+                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                        all_models.iter().collect()
+                                    } else {
+                                        let query_lower = app.search_query.to_lowercase();
+                                        all_models.iter()
+                                            .filter(|m| {
+                                                m.name.to_lowercase().contains(&query_lower) ||
+                                                m.provider.to_lowercase().contains(&query_lower) ||
+                                                m.base_url.to_lowercase().contains(&query_lower)
+                                            })
+                                            .collect()
+                                    };
+                                    
                                 if let Some(selected) = app.model_list_state.selected() {
-                                    if selected < models.len() {
-                                        let model = models[selected].clone();
-                                        if model.provider == "Custom" {
+                                        if selected < filtered.len() {
+                                            let model = filtered[selected].clone();
+                                            
+                                            // If it's a provider base URL, just set the base URL and go to settings
+                                            if model.name.starts_with("Provider:") {
+                                                app.settings_api_key = app.api_key.clone();
+                                                app.settings_base_url = model.base_url.clone();
+                                                app.settings_field = 1; // Focus on base URL field
+                                                app.error = None;
+                                                app.state = AppState::Settings;
+                                            } else if model.provider == "Custom" {
                                             app.custom_model_field = 0;
                                             app.custom_model_name.clear();
                                             app.state = AppState::CustomModel;
@@ -1124,18 +1214,83 @@ fn main() -> Result<(), Box<dyn Error>> {
                                                 app.settings_field = 0;
                                                 app.error = None;
                                                 app.state = AppState::Settings;
+                                                }
                                             }
                                         }
                                     }
                                 }
                             },
-                            crossterm::event::KeyCode::Up => {
+                            crossterm::event::KeyCode::Up if !app.model_search_focused => {
+                                let all_models = App::get_available_models();
+                                let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                    all_models.iter().collect()
+                                } else {
+                                    let query_lower = app.search_query.to_lowercase();
+                                    all_models.iter()
+                                        .filter(|m| {
+                                            m.name.to_lowercase().contains(&query_lower) ||
+                                            m.provider.to_lowercase().contains(&query_lower) ||
+                                            m.base_url.to_lowercase().contains(&query_lower)
+                                        })
+                                        .collect()
+                                };
                                 let i = app.model_list_state.selected().unwrap_or(0).saturating_sub(1);
+                                app.model_list_state.select(Some(i.min(filtered.len().saturating_sub(1))));
+                            },
+                            crossterm::event::KeyCode::Down if !app.model_search_focused => {
+                                let all_models = App::get_available_models();
+                                let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                    all_models.iter().collect()
+                                } else {
+                                    let query_lower = app.search_query.to_lowercase();
+                                    all_models.iter()
+                                        .filter(|m| {
+                                            m.name.to_lowercase().contains(&query_lower) ||
+                                            m.provider.to_lowercase().contains(&query_lower) ||
+                                            m.base_url.to_lowercase().contains(&query_lower)
+                                        })
+                                        .collect()
+                                };
+                                let i = (app.model_list_state.selected().unwrap_or(0) + 1).min(filtered.len().saturating_sub(1));
                                 app.model_list_state.select(Some(i));
                             },
-                            crossterm::event::KeyCode::Down => {
-                                let i = (app.model_list_state.selected().unwrap_or(0) + 1).min(App::get_available_models().len() - 1);
-                                app.model_list_state.select(Some(i));
+                            crossterm::event::KeyCode::Char(c) if app.model_search_focused => {
+                                app.search_query.push(c);
+                                // Auto-select first result when typing
+                                let all_models = App::get_available_models();
+                                let filtered: Vec<&ModelOption> = {
+                                    let query_lower = app.search_query.to_lowercase();
+                                    all_models.iter()
+                                        .filter(|m| {
+                                            m.name.to_lowercase().contains(&query_lower) ||
+                                            m.provider.to_lowercase().contains(&query_lower) ||
+                                            m.base_url.to_lowercase().contains(&query_lower)
+                                        })
+                                        .collect()
+                                };
+                                if !filtered.is_empty() {
+                                    app.model_list_state.select(Some(0));
+                                }
+                            },
+                            crossterm::event::KeyCode::Backspace if app.model_search_focused => {
+                                app.search_query.pop();
+                                // Auto-select first result when deleting
+                                let all_models = App::get_available_models();
+                                let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                    all_models.iter().collect()
+                                } else {
+                                    let query_lower = app.search_query.to_lowercase();
+                                    all_models.iter()
+                                        .filter(|m| {
+                                            m.name.to_lowercase().contains(&query_lower) ||
+                                            m.provider.to_lowercase().contains(&query_lower) ||
+                                            m.base_url.to_lowercase().contains(&query_lower)
+                                        })
+                                        .collect()
+                                };
+                                if !filtered.is_empty() {
+                                    app.model_list_state.select(Some(0));
+                                }
                             },
                             _ => {}
                         }
@@ -1240,7 +1395,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     },
                     AppState::CustomModel => {
                         match key.code {
-                            crossterm::event::KeyCode::Esc => app.state = AppState::ModelSelector,
+                            crossterm::event::KeyCode::Esc => {
+                                app.state = AppState::ModelSelector;
+                                app.model_search_focused = true;  // Default to search active
+                            },
                             crossterm::event::KeyCode::Tab => app.custom_model_field = (app.custom_model_field + 1) % 2,
                             crossterm::event::KeyCode::Enter => {
                                 if !app.custom_model_name.is_empty() && !app.custom_base_url.is_empty() {
@@ -1358,7 +1516,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         }
         _ => {
             // Full width input for chat and other states
-            render_input(f, app, layout[2]);
+    render_input(f, app, layout[2]);
         }
     }
     render_status_bar(f, app, layout[3]);
@@ -1408,7 +1566,7 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                 }
             }
             "edit" => {
-                if let (Some(file_path), Some(old_string), Some(new_string)) = (
+                    if let (Some(file_path), Some(old_string), Some(new_string)) = (
                         json.get("filePath").and_then(|v| v.as_str()).map(|s| s.to_string()),
                         json.get("oldString").and_then(|v| v.as_str()).map(|s| s.to_string()),
                         json.get("newString").and_then(|v| v.as_str()).map(|s| s.to_string()),
@@ -1469,10 +1627,10 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                         if max_lines > max_display_lines {
                             result.push(Line::from(Span::styled(
                                 format!("  ... {} more lines", max_lines - max_display_lines),
-                                Style::default().fg(Color::DarkGray)
-                            )));
-                        }
+                                    Style::default().fg(Color::DarkGray)
+                                )));
                     }
+                }
             }
             "file_manager" => {
                 if let Some(path) = json.get("path").and_then(|v| v.as_str()).map(|s| s.to_string()) {
@@ -1519,7 +1677,7 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                             }
                         }
                     } else if let Some(files) = json.get("files").and_then(|v| v.as_array()) {
-                        // files array (batch)
+                    // files array (batch)
                         result.push(Line::from(vec![
                             Span::styled("  Files:", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
                         ]));
@@ -1543,27 +1701,27 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                                 format!("    ... {} more", files.len() - 5),
                                 Style::default().fg(Color::DarkGray),
                             )));
-                        }
-                    }
+                }
             }
+        }
             "bash" => {
                 if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()).map(|s| s.to_string()) {
                         result.push(Line::from(vec![
-                            Span::styled("  Command: ", Style::default().fg(Color::Gray)),
-                            Span::styled(cmd, Style::default().fg(Color::White)),
-                        ]));
-                    }
+                        Span::styled("  Command: ", Style::default().fg(Color::Gray)),
+                        Span::styled(cmd, Style::default().fg(Color::White)),
+                    ]));
             }
+        }
             "grep" => {
                 if let Some(pattern) = json.get("pattern").and_then(|v| v.as_str()) {
                     result.push(Line::from(vec![
-                        Span::styled("  Pattern: ", Style::default().fg(Color::Gray)),
+                            Span::styled("  Pattern: ", Style::default().fg(Color::Gray)),
                         Span::styled(pattern.to_string(), Style::default().fg(Color::White)),
                     ]));
                 }
                 if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
                     result.push(Line::from(vec![
-                        Span::styled("  Path: ", Style::default().fg(Color::Gray)),
+                            Span::styled("  Path: ", Style::default().fg(Color::Gray)),
                         Span::styled(path.to_string(), Style::default().fg(Color::White)),
                     ]));
                 }
@@ -1598,23 +1756,23 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
 }
 
 fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status: &ToolStatus) -> ListItem<'static> {
-    let status_style = match status {
-        ToolStatus::Running => Style::default().fg(Color::Yellow),
+                let status_style = match status {
+                    ToolStatus::Running => Style::default().fg(Color::Yellow),
         ToolStatus::Success => Style::default().fg(Color::Rgb(100, 200, 100)), // Softer green
         ToolStatus::Error => Style::default().fg(Color::Rgb(200, 100, 100)), // Softer red
-    };
-    let icon = match status {
-        ToolStatus::Running => "⏳",
-        ToolStatus::Success => "✓",
-        ToolStatus::Error => "✗",
-    };
-    
+                };
+                let icon = match status {
+                    ToolStatus::Running => "⏳",
+                    ToolStatus::Success => "✓",
+                    ToolStatus::Error => "✗",
+                };
+                
     // Clean, minimal card design
     let card_bg = Color::Rgb(25, 25, 25); // Slightly lighter for better visibility
     
     // Minimal header - just icon and name, no extra spacing
-    let mut lines = vec![
-        Line::from(vec![
+                let mut lines = vec![
+                    Line::from(vec![
             Span::styled(format!("{} ", icon), status_style.add_modifier(Modifier::BOLD)),
             Span::styled(format!("{}", name), status_style.add_modifier(Modifier::BOLD)),
         ]),
@@ -1627,7 +1785,7 @@ fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status
     }
     
     // Add result if available - minimal, clean display
-    if let Some(res) = result {
+                if let Some(res) = result {
         if !res.trim().is_empty() {
             // For edit tool, just show success message briefly
             if name == "edit" && status == &ToolStatus::Success {
@@ -2078,20 +2236,127 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-// Missing render functions need implementation or copying back
 fn render_model_selector(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    let rect = centered_rect(60, 60, area);
+    // Use full area with small margins for better usability
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
     f.render_widget(Clear, rect);
-    let block = Block::default().borders(Borders::ALL).title("Select Model");
-    let items: Vec<ListItem> = App::get_available_models().iter().map(|m| ListItem::new(m.name.clone())).collect();
-    let list = List::new(items).block(block).highlight_style(Style::default().fg(Color::Yellow));
-    f.render_stateful_widget(list, rect, &mut app.model_list_state);
+    
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Select Model")
+        .title_style(Style::default().fg(Color::White));
+    
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // Search field
+            Constraint::Min(10),    // Model list
+            Constraint::Length(2),  // Footer hints
+        ])
+        .split(inner);
+    
+    // Search field
+    let search_block = Block::default()
+        .borders(Borders::ALL)
+        .title(if app.model_search_focused { "Search (active)" } else { "Search" })
+        .title_style(if app.model_search_focused {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Gray)
+        });
+    
+    let search_text = if app.search_query.is_empty() {
+        "Type to search models or providers...".to_string()
+    } else {
+        app.search_query.clone()
+    };
+    
+    let search_style = if app.search_query.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    
+    let search_para = Paragraph::new(search_text)
+        .block(search_block)
+        .style(search_style);
+    f.render_widget(search_para, layout[0]);
+    
+    // Filter models based on search query
+    let all_models = App::get_available_models();
+    let filtered_models: Vec<&ModelOption> = if app.search_query.is_empty() {
+        all_models.iter().collect()
+    } else {
+        let query_lower = app.search_query.to_lowercase();
+        all_models.iter()
+            .filter(|m| {
+                m.name.to_lowercase().contains(&query_lower) ||
+                m.provider.to_lowercase().contains(&query_lower) ||
+                m.base_url.to_lowercase().contains(&query_lower)
+            })
+            .collect()
+    };
+    
+    // Update selection if current selection is out of bounds
+    if let Some(selected) = app.model_list_state.selected() {
+        if selected >= filtered_models.len() {
+            app.model_list_state.select(Some(0.max(filtered_models.len().saturating_sub(1))));
+        }
+    } else if !filtered_models.is_empty() {
+        app.model_list_state.select(Some(0));
+    }
+    
+    let items: Vec<ListItem> = filtered_models.iter()
+        .map(|m| {
+            let display_name = if m.name.starts_with("Provider:") {
+                format!("{} → {}", m.name, m.base_url)
+            } else {
+                format!("{} ({})", m.name, m.provider)
+            };
+            ListItem::new(display_name)
+        })
+        .collect();
+    
+    let model_block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!("Models ({} found)", filtered_models.len()));
+    
+    let list = List::new(items)
+        .block(model_block)
+        .highlight_style(Style::default().fg(Color::Yellow).bg(Color::Rgb(50, 50, 50)));
+    
+    f.render_stateful_widget(list, layout[1], &mut app.model_list_state);
+    
+    // Footer hints
+    let hints = if app.model_search_focused {
+        "Type to search | Tab: switch to list | Esc: back"
+    } else {
+        "Tab: focus search | ↑/↓: navigate | Enter: select | Esc: back"
+    };
+    let hints_para = Paragraph::new(hints)
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(hints_para, layout[2]);
 }
 
 fn render_agent_selector(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    let rect = centered_rect(60, 60, area);
+    // Use full area with small margins
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Select Agent");
     let items: Vec<ListItem> = App::get_available_agents().iter().map(|(n, d, _)| ListItem::new(format!("{} - {}", n, d))).collect();
@@ -2101,7 +2366,13 @@ fn render_agent_selector(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    let rect = centered_rect(60, 70, area);
+    // Use full area with small margins
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
     f.render_widget(Clear, rect);
 
     let block = Block::default().borders(Borders::ALL).title("Settings");
@@ -2242,7 +2513,13 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_session_selector(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    let rect = centered_rect(60, 60, area);
+    // Use full area with small margins
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Sessions (hjkl/↑↓)");
     let items: Vec<ListItem> = app
@@ -2262,7 +2539,13 @@ fn render_session_selector(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_help(f: &mut Frame, _app: &App, area: Rect) {
     f.render_widget(Clear, area);
-    let rect = centered_rect(60, 60, area);
+    // Use full area with small margins
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Help");
     let text = "Available Commands:\n\n/models - Select Model\n/agents - Select Agent\n/settings - Configure API key / model / base URL\n/help - Show this help screen\n/clear - Clear conversation and reset agent\n\nNavigation:\nUse Arrows to navigate lists.\nEnter to select.\nEsc to go back.\n\nTip: Type '/' in the input to see all available commands.";
@@ -2272,7 +2555,13 @@ fn render_help(f: &mut Frame, _app: &App, area: Rect) {
 
 fn render_custom_model(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    let rect = centered_rect(60, 40, area);
+    // Use full area with small margins
+    let rect = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Custom Model");
     
