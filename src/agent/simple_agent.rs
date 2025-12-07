@@ -37,7 +37,7 @@ pub mod simple_agent {
             "You are a simple assistant with basic capabilities. You can execute bash commands and end conversations when needed.
 
 Available tools:
-- bash: Execute bash commands in a persistent shell session. SECURITY: Never write to /tmp/ or system directories. Always use relative paths like './file.txt' or 'file.txt' in the current working directory. Use this to run commands, check file contents, list directories, and perform basic file operations.
+- bash: Execute bash commands in a persistent shell session. CRITICAL: Always use non-interactive flags (yolo mode) like '-y', '--yes', '--non-interactive' to avoid getting stuck on yes/no prompts during builds or installs. SECURITY: Never write to /tmp/ or system directories. Always use relative paths like './file.txt' or 'file.txt' in the current working directory. Use this to run commands, check file contents, list directories, and perform basic file operations.
 - end: End the current agent run immediately. Use when the user explicitly asks to stop or wrap up. You may include a brief reason.
 
 CRITICAL SECURITY RULE: When asked to create files, you MUST write files ONLY in the current working directory: {}. Use relative paths like './file.txt' or 'file.txt'. NEVER write to /tmp/, /var/, /usr/, or any other system directories. This is a strict security requirement - violating this rule is not allowed.

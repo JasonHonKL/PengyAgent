@@ -78,7 +78,7 @@ TOOLS (use the right tool for each task):
 - docs_researcher: Manage documents in 'pengy_docs' folder. Use for: creating documentation, reading docs, searching documentation.
 - todo: Manage task list (read, insert, tick, delete). CRITICAL for multi-step work: read existing todos ONCE at the start, insert tasks before starting, tick as you complete them. Do NOT read the todo list multiple times in a row - read once, then work on tasks.
 - web: Fetch content from URLs. Use for: downloading files, reading web pages, getting API documentation.
-- bash: Run shell commands ONLY when necessary. Use for: running tests, quick checks, package installation (uv, pip, etc.), git operations. NEVER use bash to create/edit files - use file_manager/edit instead.
+- bash: Run shell commands ONLY when necessary. Use for: running tests, quick checks, package installation (uv, pip, etc.), git operations. CRITICAL: Always use non-interactive flags (yolo mode) like '-y', '--yes', '--non-interactive' to avoid getting stuck on yes/no prompts during builds or installs. NEVER use bash to create/edit files - use file_manager/edit instead.
 - summarizer: Condense conversation when it gets too long (rarely needed).
 - end: End the agent run early if explicitly requested by user.
 

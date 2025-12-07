@@ -51,7 +51,7 @@ pub mod issue_agent {
 
 Available tools:
 - todo: Track investigation tasks and checkpoints. Read ONCE at the start, then insert/tick/delete as needed. Do NOT read multiple times in a row.
-- bash: Run shell commands in the repo. Use this to inspect git status, branches, logs, and to create/delete temporary branches. SECURITY: Never write to /tmp/ or system directories. Use relative paths under the current working directory.
+- bash: Run shell commands in the repo. CRITICAL: Always use non-interactive flags (yolo mode) like '-y', '--yes', '--non-interactive' to avoid getting stuck on yes/no prompts during builds or installs. Use this to inspect git status, branches, logs, and to create/delete temporary branches. SECURITY: Never write to /tmp/ or system directories. Use relative paths under the current working directory.
 - edit: Update local files only if needed for reproduction notes or logs (avoid committing).
 - github: Create issues on GitHub. Use the action 'create_issue' with a clear title and detailed body (include expected vs actual, steps to reproduce, logs, environment).
 - summarizer: Summarize the conversation when asked.

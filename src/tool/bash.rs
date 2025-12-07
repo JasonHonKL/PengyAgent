@@ -35,7 +35,7 @@ pub mod bash {
             cmd_items.insert("type".to_string(), "string".to_string());
             parameters.insert("cmd".to_string(), Parameter {
                 items: cmd_items,
-                description: "The bash command to execute. SECURITY: Never write to /tmp/ or system directories. Always use relative paths like './file.txt' or 'file.txt' in the current working directory. This is a security requirement.".to_string(),
+                description: "The bash command to execute. CRITICAL: Always use non-interactive flags (yolo mode) to avoid getting stuck on prompts. For package installers: use '-y' (apt, yum), '--yes' (pip, npm), '--non-interactive' (other tools). For builds: use '--yes', '-y', or pipe 'yes' command. SECURITY: Never write to /tmp/ or system directories. Always use relative paths like './file.txt' or 'file.txt' in the current working directory. This is a security requirement.".to_string(),
                 enum_values: None,
             });
 
@@ -50,7 +50,7 @@ pub mod bash {
 
             let tool = Tool {
                 name: "bash".to_string(),
-                description: "Execute bash commands in a persistent shell session. SECURITY: Never write to /tmp/ or other system directories. Always write files in the current working directory using relative paths like './file.txt' or 'file.txt'. Use the restart parameter to clear the session state if needed. REQUIRED: You must specify waitForCompletion to indicate whether to wait for the command to finish or continue immediately.".to_string(),
+                description: "Execute bash commands in a persistent shell session. CRITICAL: Always use non-interactive flags (yolo mode) to avoid getting stuck on yes/no prompts. For package managers: use '-y' (apt, yum), '--yes' (pip, npm, cargo), '--non-interactive' (other tools). For builds/installs: always add flags like '--yes', '-y', or pipe 'yes | command' to auto-answer prompts. SECURITY: Never write to /tmp/ or other system directories. Always write files in the current working directory using relative paths like './file.txt' or 'file.txt'. Use the restart parameter to clear the session state if needed. REQUIRED: You must specify waitForCompletion to indicate whether to wait for the command to finish or continue immediately.".to_string(),
                 parameters,
                 required: vec!["cmd".to_string(), "waitForCompletion".to_string()],
             };

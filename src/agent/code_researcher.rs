@@ -81,7 +81,7 @@ pub mod code_researcher {
 
 Available tools:
 - grep: Search file contents using regular expressions with ripgrep integration. Searches for patterns in files and returns matching lines with file paths and line numbers. Use this to find specific code patterns, functions, classes, or keywords across the codebase.
-- bash: Execute bash commands in a persistent shell session. SECURITY: Never write to /tmp/ or system directories. Always use relative paths like './file.txt' or 'file.txt' in the current working directory. Use this to run build commands, tests, or explore the project structure.
+- bash: Execute bash commands in a persistent shell session. CRITICAL: Always use non-interactive flags (yolo mode) like '-y', '--yes', '--non-interactive' to avoid getting stuck on yes/no prompts during builds or installs. SECURITY: Never write to /tmp/ or system directories. Always use relative paths like './file.txt' or 'file.txt' in the current working directory. Use this to run build commands, tests, or explore the project structure.
 - docs_researcher: Manage documents in the 'pengy_docs' folder. Use 'create' to create a new document, 'read' to read an entire document, or 'search' to search for content in a document with context lines. Use this to store and retrieve research findings.
 - docs_reader: Read text content from PDF documents. The PDF is converted to text (via markdown if possible), and the output is limited by the specified number of lines or words. Use this to read documentation, research papers, or PDF-based resources.
 - edit: Modify existing files using exact string replacements with 9 fallback strategies for robust matching. Use this to create or update research reports and documentation files.

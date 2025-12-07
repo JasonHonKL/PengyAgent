@@ -783,7 +783,50 @@ fn handle_welcome_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio:
                                     if app.initialize_model().is_ok() {
                                         app.state = AppState::Chat;
                                         if !app.chat_input.trim().is_empty() {
-                                            rt.block_on(app.send_message())?;
+                                            // Use handle to spawn without blocking
+                                            let handle = rt.handle().clone();
+                                            let user_input = app.chat_input.clone();
+                                            app.chat_input.clear();
+                                            app.input_cursor = 0;
+                                            app.chat_messages.push(ChatMessage::User(user_input.clone()));
+                                            app.loading = true;
+                                            app.error = None;
+                                            app.user_scrolled = false;
+                                            
+                                            // Clone what we need for async
+                                            let tx = app.tx.clone();
+                                            let model_option = app.selected_model.clone();
+                                            let api_key = app.api_key.clone();
+                                            let model = app.model.clone();
+                                            
+                                            handle.spawn(async move {
+                                                // Recreate minimal app state for send_message logic
+                                                // Since send_message spawns tasks, we just need to trigger it
+                                                // But we've already done the state updates above
+                                                // So we just spawn the agent work directly
+                                                if let Some(model) = model {
+                                                    let base_url = model_option
+                                                        .as_ref()
+                                                        .map(|m| App::normalize_base_url(&m.base_url))
+                                                        .unwrap_or_default();
+                                                    
+                                                    let callback_tx = tx.clone();
+                                                    let callback = move |event: AgentEvent| {
+                                                        let _ = callback_tx.send(event);
+                                                    };
+                                                    
+                                                    let _ = run_pengy_agent(
+                                                        model,
+                                                        api_key,
+                                                        base_url,
+                                                        Some("openai/text-embedding-3-small".to_string()),
+                                                        user_input,
+                                                        Some(3),
+                                                        Some(50),
+                                                        callback
+                                                    ).await;
+                                                }
+                                            });
                                         }
                                     }
                                 }
@@ -830,8 +873,67 @@ fn handle_chat_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio::ru
                 }
                 handle_command_inline(app, &cmd, AppState::Chat);
             } else if !app.chat_input.trim().is_empty() {
-                rt.block_on(app.send_message())?;
+                // Use handle to spawn without blocking to avoid runtime conflicts
+                let handle = rt.handle().clone();
+                let user_input = app.chat_input.clone();
+                app.chat_input.clear();
+                app.input_cursor = 0;
                 app.show_command_hints = false;
+                app.chat_messages.push(ChatMessage::User(user_input.clone()));
+                app.loading = true;
+                app.error = None;
+                app.user_scrolled = false;
+                
+                // Clone what we need for async
+                let tx = app.tx.clone();
+                let agent_tx = app.agent_tx.clone();
+                let model_option = app.selected_model.clone();
+                let api_key = app.api_key.clone();
+                let selected_agent = app.selected_agent;
+                let model = app.model.clone();
+                let agent = app.agent.take();
+                
+                handle.spawn(async move {
+                    match selected_agent {
+                        AgentType::PengyAgent => {
+                            if let Some(model) = model {
+                                let base_url = model_option
+                                    .as_ref()
+                                    .map(|m| App::normalize_base_url(&m.base_url))
+                                    .unwrap_or_default();
+                                
+                                let callback_tx = tx.clone();
+                                let callback = move |event: AgentEvent| {
+                                    let _ = callback_tx.send(event);
+                                };
+                                
+                                let _ = run_pengy_agent(
+                                    model,
+                                    api_key,
+                                    base_url,
+                                    Some("openai/text-embedding-3-small".to_string()),
+                                    user_input,
+                                    Some(3),
+                                    Some(50),
+                                    callback
+                                ).await;
+                            }
+                        }
+                        _ => {
+                            if let Some(mut agent_to_run) = agent {
+                                let callback_tx = tx.clone();
+                                let callback = move |event: AgentEvent| {
+                                    let _ = callback_tx.send(event);
+                                };
+                                
+                                agent_to_run.run(user_input, callback).await;
+                                
+                                // Return the agent after completion
+                                let _ = agent_tx.send(agent_to_run);
+                            }
+                        }
+                    }
+                });
             }
         }
         crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Down | 
@@ -1251,7 +1353,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     match app.state {
         AppState::Welcome => {
             // Center input area on welcome page (like OpenCode) - matches OpenCode welcome styling
-            let centered_input = centered_rect(70, 12, f.area()); // Using 12% height for better OpenCode match
+            let centered_input = centered_rect(70, 8, f.area()); // Slightly smaller input area
             render_input(f, app, centered_input);
         }
         _ => {
@@ -1352,7 +1454,7 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
 
                             if old_line_owned != new_line_owned {
                                 result.push(Line::from(vec![
-                                    Span::styled(padded_left.clone(), Style::default().fg(Color::Rgb(200, 100, 100)).bg(Color::Rgb(40, 20, 20))),
+                                    Span::styled(padded_left.clone(), Style::default().fg(Color::White).bg(Color::Rgb(40, 20, 20))), // Red bg, white text
                                     Span::styled(" │ ", Style::default().fg(Color::Rgb(60, 60, 60))),
                                     Span::styled(padded_right.clone(), Style::default().fg(Color::White).bg(Color::Rgb(20, 100, 20))), // Green bg, white text
                                 ]));
@@ -1720,7 +1822,10 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
     let input_paragraph = Paragraph::new(input_content);
     f.render_widget(input_paragraph, inner_area);
 
-    // Hints removed for a cleaner OpenCode-like input
+    // Show command hints when "/" is typed (for new users)
+    if app.show_command_hints {
+        render_command_hints(f, app, area);
+    }
 
     // Calculate cursor position (adjusted for new inner area)
     let mut char_count = 0;
