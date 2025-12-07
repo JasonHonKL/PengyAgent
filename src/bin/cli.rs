@@ -1345,7 +1345,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 if app.model_search_focused {
                                     app.model_search_focused = false;
                                 } else {
-                                    let models = App::get_available_models();
+                                let models = App::get_available_models();
                                     let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
                                         models.iter()
                                             .filter(|m| !m.name.starts_with("Provider:"))
@@ -1363,26 +1363,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                                             .collect()
                                     };
                                     
-                                    if let Some(selected) = app.model_list_state.selected() {
+                                if let Some(selected) = app.model_list_state.selected() {
                                         if selected < filtered.len() {
                                             let model = filtered[selected].clone();
-                                            if model.provider == "Custom" {
-                                                app.custom_model_field = 0;
-                                                app.custom_model_name.clear();
+                                        if model.provider == "Custom" {
+                                            app.custom_model_field = 0;
+                                            app.custom_model_name.clear();
                                                 app.custom_base_url.clear(); // Clear base URL for custom model
-                                                app.state = AppState::CustomModel;
+                                            app.state = AppState::CustomModel;
+                                        } else {
+                                            app.selected_model = Some(model);
+                                            if !app.api_key.is_empty() {
+                                                if app.initialize_model().is_ok() {
+                                                    app.state = AppState::Chat;
+                                                }
                                             } else {
-                                                app.selected_model = Some(model);
-                                                if !app.api_key.is_empty() {
-                                                    if app.initialize_model().is_ok() {
-                                                        app.state = AppState::Chat;
-                                                    }
-                                                } else {
-                                                    app.settings_api_key = app.api_key.clone();
-                                                    app.settings_base_url = app.selected_model.as_ref().map(|m| m.base_url.clone()).unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-                                                    app.settings_field = 0;
-                                                    app.error = None;
-                                                    app.state = AppState::Settings;
+                                                app.settings_api_key = app.api_key.clone();
+                                                app.settings_base_url = app.selected_model.as_ref().map(|m| m.base_url.clone()).unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+                                                app.settings_field = 0;
+                                                app.error = None;
+                                                app.state = AppState::Settings;
                                                 }
                                             }
                                         }
@@ -1873,20 +1873,39 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 
     // Center input - welcome uses full screen centering
-    match app.state {
+    let input_area = match app.state {
         AppState::Welcome => {
             // Center input area on welcome page (like OpenCode) - matches OpenCode welcome styling
-            let centered_input = centered_rect(70, 12, f.area()); // Using 12% height for better OpenCode match
-            render_input(f, app, centered_input);
+            centered_rect(70, 12, f.area()) // Using 12% height for better OpenCode match
+        }
+        AppState::CustomModel => {
+            // Don't render main input when in CustomModel - the custom model form handles input
+            Rect::default() // Empty rect, won't be used
+        }
+        _ => {
+            // Full width input for chat and other states
+            layout[2]
+        }
+    };
+    
+    // Render command hints at frame level (not inside input area) so they're always visible
+    if (app.state == AppState::Welcome || app.state == AppState::Chat) && app.show_command_hints && app.chat_input.starts_with('/') {
+        render_command_hints(f, app, input_area);
+    }
+    
+    // Render input
+    match app.state {
+        AppState::Welcome => {
+            render_input(f, app, input_area);
         }
         AppState::CustomModel => {
             // Don't render main input when in CustomModel - the custom model form handles input
         }
         _ => {
-            // Full width input for chat and other states
-            render_input(f, app, layout[2]);
+            render_input(f, app, input_area);
         }
     }
+    
     render_status_bar(f, app, layout[3]);
 }
 
@@ -2348,11 +2367,6 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
     let input_paragraph = Paragraph::new(input_content);
     f.render_widget(input_paragraph, inner_area);
 
-    // Show command hints when typing "/"
-    if app.show_command_hints && app.chat_input.starts_with('/') {
-        render_command_hints(f, app, area);
-    }
-
     // Calculate cursor position (adjusted for new inner area)
     let mut char_count = 0;
     let mut cursor_line = 0;
@@ -2559,15 +2573,30 @@ fn render_command_hints(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
     
-    if filtered.is_empty() { return; }
+    if filtered.is_empty() { 
+        return; 
+    }
     
     // Show more commands when just "/" is typed, limit to 6 for better visibility
     let max_height = if app.chat_input == "/" { 6 } else { 5 };
     let height = filtered.len().min(max_height) as u16;
+    
+    // Calculate popup position - ensure it's visible above the input area
+    // For welcome page with centered input, position hints directly above the input
+    let popup_y = if area.y >= height + 3 {
+        area.y.saturating_sub(height + 3)
+    } else {
+        // If not enough space above, show below instead
+        area.y + area.height + 2
+    };
+    
+    // Ensure popup doesn't go off-screen
+    let popup_y = popup_y.max(1);
+    
     let popup_area = Rect { 
         x: area.x, 
-        y: area.y.saturating_sub(height + 1), 
-        width: area.width, 
+        y: popup_y,
+        width: area.width.min(60), // Limit width for better visibility
         height: height + 1 
     };
     
