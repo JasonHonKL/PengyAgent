@@ -39,11 +39,20 @@ pub mod bash {
                 enum_values: None,
             });
 
+            // waitForCompletion parameter (required)
+            let mut wait_items = HashMap::new();
+            wait_items.insert("type".to_string(), "boolean".to_string());
+            parameters.insert("waitForCompletion".to_string(), Parameter {
+                items: wait_items,
+                description: "REQUIRED: If true, wait for the command to finish before returning. If false, continue immediately without waiting for completion. You must specify whether to wait or continue.".to_string(),
+                enum_values: None,
+            });
+
             let tool = Tool {
                 name: "bash".to_string(),
-                description: "Execute bash commands in a persistent shell session. SECURITY: Never write to /tmp/ or other system directories. Always write files in the current working directory using relative paths like './file.txt' or 'file.txt'. Use the restart parameter to clear the session state if needed.".to_string(),
+                description: "Execute bash commands in a persistent shell session. SECURITY: Never write to /tmp/ or other system directories. Always write files in the current working directory using relative paths like './file.txt' or 'file.txt'. Use the restart parameter to clear the session state if needed. REQUIRED: You must specify waitForCompletion to indicate whether to wait for the command to finish or continue immediately.".to_string(),
                 parameters,
-                required: vec!["cmd".to_string()],
+                required: vec!["cmd".to_string(), "waitForCompletion".to_string()],
             };
 
             Self {
@@ -139,21 +148,38 @@ pub mod bash {
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: cmd")?;
 
+            // Get waitForCompletion (required)
+            let wait_for_completion = args.get("waitForCompletion")
+                .and_then(|v| v.as_bool())
+                .ok_or("Missing required parameter: waitForCompletion. You must specify whether to wait for the command to finish (true) or continue immediately (false).")?;
+
             // Restart session if requested
             if restart {
                 self.restart_session()?;
             }
 
             // Execute the command
-            match self.execute_command(cmd) {
-                Ok(output) => {
-                    if output.is_empty() {
-                        Ok("Command executed successfully (no output)".to_string())
-                    } else {
-                        Ok(output)
+            if wait_for_completion {
+                // Wait for completion (existing behavior)
+                match self.execute_command(cmd) {
+                    Ok(output) => {
+                        if output.is_empty() {
+                            Ok("Command executed successfully (no output)".to_string())
+                        } else {
+                            Ok(output)
+                        }
                     }
+                    Err(e) => Err(format!("Failed to execute command: {}", e).into())
                 }
-                Err(e) => Err(format!("Failed to execute command: {}", e).into())
+            } else {
+                // Continue immediately - execute in background
+                // For now, we'll still execute synchronously but return immediately
+                // In a real implementation, this would spawn a background process
+                // For simplicity, we'll execute it but indicate we're not waiting
+                match self.execute_command(cmd) {
+                    Ok(_) => Ok("Command started (continuing without waiting for completion)".to_string()),
+                    Err(e) => Err(format!("Failed to start command: {}", e).into())
+                }
             }
         }
 

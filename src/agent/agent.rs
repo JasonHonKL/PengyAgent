@@ -416,7 +416,6 @@ pub mod agent {
                                 }
                                 
                                 // If tool was NOT executed (no tool result), fall through to text-based execution below
-                                eprintln!("DEBUG: Tool call found but not executed, will execute as text-based tool call");
                             }
                             
                             // Check if the model returned a text-based tool call that wasn't executed
@@ -424,15 +423,11 @@ pub mod agent {
                             if let Some(last_msg) = messages.last() {
                                 let content_trimmed = last_msg.content.trim();
                                 if matches!(last_msg.role, Role::Assistant) && content_trimmed.starts_with("Tool call:") {
-                                    eprintln!("DEBUG: Detected text-based tool call in assistant message");
-                                    eprintln!("DEBUG: Full content (first 200 chars): {}", &last_msg.content[..last_msg.content.len().min(200)]);
                                     // This is a text-based tool call that needs to be executed manually
                                     if let Some(tool_info) = content_trimmed.strip_prefix("Tool call: ") {
-                                        eprintln!("DEBUG: Tool info: {}", &tool_info[..tool_info.len().min(100)]);
                                         // Try to parse and execute the tool call
                                         match serde_json::from_str::<serde_json::Value>(tool_info.trim()) {
                                             Ok(json) => {
-                                                eprintln!("DEBUG: Successfully parsed tool call JSON");
                                                 let tool_name = json.get("name")
                                                     .and_then(|v| v.as_str())
                                                     .unwrap_or("unknown");
@@ -440,11 +435,8 @@ pub mod agent {
                                                     .and_then(|v| v.as_str())
                                                     .unwrap_or("");
                                                 
-                                                eprintln!("DEBUG: Tool name: {}, arguments length: {}", tool_name, arguments.len());
-                                                
                                                 // Find and execute the tool
                                                 if let Some(tool) = tools_slice.and_then(|tools| tools.iter().find(|t| t.name() == tool_name)) {
-                                                    eprintln!("DEBUG: Found tool {}, executing...", tool_name);
                                                     callback(AgentEvent::ToolCall { 
                                                         tool_name: tool_name.to_string(), 
                                                         args: arguments.to_string() 
@@ -452,7 +444,6 @@ pub mod agent {
                                                     
                                                     match tool.run(arguments) {
                                                         Ok(result) => {
-                                                            eprintln!("DEBUG: Tool execution succeeded");
                                                             callback(AgentEvent::ToolResult { result: result.clone() });
                                                             // Add the tool result message and update self.messages
                                                             let mut updated_messages = messages.clone();
@@ -461,7 +452,6 @@ pub mod agent {
                                                             break Ok(());
                                                         }
                                                         Err(e) => {
-                                                            eprintln!("DEBUG: Tool execution failed: {}", e);
                                                             let error_result = format!("Tool error: {}", e);
                                                             callback(AgentEvent::ToolResult { result: error_result.clone() });
                                                             let mut updated_messages = messages.clone();
@@ -471,7 +461,6 @@ pub mod agent {
                                                         }
                                                     }
                                                 } else {
-                                                    eprintln!("DEBUG: Tool '{}' not found in tools list", tool_name);
                                                     // Tool not found
                                                     let error_result = format!("Tool error: Tool '{}' not found", tool_name);
                                                     callback(AgentEvent::ToolResult { result: error_result.clone() });
@@ -482,7 +471,6 @@ pub mod agent {
                                                 }
                                             }
                                             Err(e) => {
-                                                eprintln!("DEBUG: Failed to parse tool call JSON: {}", e);
                                                 // Failed to parse - treat as malformed tool call
                                                 let error_result = format!("Tool error: Failed to parse tool call JSON: {}", e);
                                                 callback(AgentEvent::ToolResult { result: error_result.clone() });
@@ -492,13 +480,7 @@ pub mod agent {
                                 break Ok(());
                                             }
                                         }
-                                    } else {
-                                        eprintln!("DEBUG: Could not strip 'Tool call: ' prefix");
                                     }
-                                } else {
-                                    eprintln!("DEBUG: Last message is not a tool call. Role: {:?}, starts_with Tool call: {}", 
-                                        last_msg.role, 
-                                        last_msg.content.starts_with("Tool call:"));
                                 }
                             }
                             
@@ -510,8 +492,6 @@ pub mod agent {
                                     self.messages = messages.clone();
                                     callback(AgentEvent::FinalResponse { content: last_msg.content.clone() });
                                     return;
-                                } else if matches!(last_msg.role, Role::Assistant) && content_trimmed.starts_with("Tool call:") {
-                                    eprintln!("DEBUG: Final response check detected tool call, should not show as final response");
                                 }
                             }
                             
