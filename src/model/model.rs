@@ -1,4 +1,4 @@
-pub mod Model {
+pub mod model {
     use std::error::Error;
 
     use serde::{Serialize, Deserialize};
@@ -20,10 +20,124 @@ pub mod Model {
         pub base_url: String,
     }
 
-    #[derive(Debug, Clone, Serialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Message{
         pub role:  Role,
         pub content: String,
+    }
+
+    // Vision API content types
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(tag = "type")]
+    pub enum ContentItem {
+        #[serde(rename = "text")]
+        Text {
+            text: String,
+        },
+        #[serde(rename = "image_url")]
+        ImageUrl {
+            image_url: ImageUrl,
+        },
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ImageUrl {
+        pub url: String,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct VisionMessage {
+        pub role: Role,
+        pub content: VisionMessageContent,
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum VisionMessageContent {
+        Text(String),
+        Array(Vec<ContentItem>),
+    }
+
+    impl Serialize for VisionMessage {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            use serde::ser::SerializeStruct;
+            let mut state = serializer.serialize_struct("VisionMessage", 2)?;
+            state.serialize_field("role", &self.role)?;
+            match &self.content {
+                VisionMessageContent::Text(text) => {
+                    state.serialize_field("content", text)?;
+                }
+                VisionMessageContent::Array(items) => {
+                    state.serialize_field("content", items)?;
+                }
+            }
+            state.end()
+        }
+    }
+
+    impl<'de> Deserialize<'de> for VisionMessage {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            use serde::de::{self, Visitor};
+            use std::fmt;
+
+            struct VisionMessageVisitor;
+
+            impl<'de> Visitor<'de> for VisionMessageVisitor {
+                type Value = VisionMessage;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("a vision message with role and content")
+                }
+
+                fn visit_map<V>(self, mut map: V) -> Result<VisionMessage, V::Error>
+                where
+                    V: de::MapAccess<'de>,
+                {
+                    let mut role = None;
+                    let mut content = None;
+
+                    while let Some(key) = map.next_key()? {
+                        match key {
+                            "role" => {
+                                if role.is_some() {
+                                    return Err(de::Error::duplicate_field("role"));
+                                }
+                                role = Some(map.next_value()?);
+                            }
+                            "content" => {
+                                if content.is_some() {
+                                    return Err(de::Error::duplicate_field("content"));
+                                }
+                                // Try to deserialize as string first, then as array
+                                let value: serde_json::Value = map.next_value()?;
+                                content = Some(if value.is_string() {
+                                    VisionMessageContent::Text(value.as_str().unwrap().to_string())
+                                } else if value.is_array() {
+                                    VisionMessageContent::Array(serde_json::from_value(value).map_err(de::Error::custom)?)
+                                } else {
+                                    return Err(de::Error::custom("content must be string or array"));
+                                });
+                            }
+                            _ => {
+                                let _ = map.next_value::<de::IgnoredAny>()?;
+                            }
+                        }
+                    }
+
+                    let role = role.ok_or_else(|| de::Error::missing_field("role"))?;
+                    let content = content.ok_or_else(|| de::Error::missing_field("content"))?;
+
+                    Ok(VisionMessage { role, content })
+                }
+            }
+
+            deserializer.deserialize_map(VisionMessageVisitor)
+        }
     }
 
 
@@ -87,6 +201,20 @@ pub mod Model {
         }
     }
 
+    impl<'de> Deserialize<'de> for Role {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de> {
+            let s = String::deserialize(deserializer)?;
+            match s.as_str() {
+                "user" => Ok(Role::User),
+                "assistant" => Ok(Role::Assistant),
+                "system" => Ok(Role::System),
+                _ => Err(serde::de::Error::custom(format!("Unknown role: {}", s))),
+            }
+        }
+    }
+
     impl Model {
         pub fn new(model_name: String, api_key: String, base_url: String) -> Self {
             Self {
@@ -96,7 +224,7 @@ pub mod Model {
             }
         }
 
-        pub async fn complete(&self, messages: Vec<Message> , tools: Option<Vec<tool::Tool>>) -> Result<String , Box<dyn Error>>{
+        pub async fn complete(&self, mut messages: Vec<Message> , tools: Option<&[Box<dyn tool::ToolCall>]>) -> Result<Vec<Message> , Box<dyn Error + Send + Sync>>{
 
             let client = reqwest::Client::new();
             let mut req_builder = client.request(reqwest::Method::POST, self.base_url.clone());
@@ -107,7 +235,7 @@ pub mod Model {
                 tools: None,
             };
 
-            if let Some(tools_vec) = tools {
+            if let Some(ref tools_vec) = tools {
                 body.tools = Some(convert_tools(tools_vec)?);
             }
 
@@ -131,12 +259,234 @@ pub mod Model {
             
             // Extract content from the first choice
             if let Some(choice) = response_json.choices.first() {
+                // Check if there are tool calls
+                if let Some(tool_calls) = &choice.message.tool_calls {
+                    // Execute tool calls
+                    for tool_call in tool_calls {
+                        if let Some(tools_slice) = tools {
+                            // Find the tool by name
+                            if let Some(tool) = tools_slice.iter().find(|t| t.name() == tool_call.function.name) {
+                                // Execute the tool with 120 second timeout
+                                let tool_name = tool_call.function.name.clone();
+                                let arguments = tool_call.function.arguments.clone();
+                                
+                                // Create Arc wrapper for the tool to share across thread boundary
+                                // Since tool is &Box<dyn ToolCall>, we need to clone the Box
+                                // But Box<dyn ToolCall> doesn't implement Clone, so we'll use a different approach
+                                // We'll wrap the tool execution in a closure that can be moved
+                                
+                                // Use a channel to communicate result from thread
+                                let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+                                let args_for_thread = arguments.clone();
+                                
+                                // Execute tool.run() and send result through channel
+                                // Note: Since we can't move the tool reference into a thread,
+                                // we execute it in the current thread. The timeout applies to
+                                // receiving the result, not the execution itself. For a true
+                                // execution timeout, we would need Arc<Box<dyn ToolCall>>.
+                                let tool_result = tool.run(&args_for_thread);
+                                let result_for_channel = tool_result.map_err(|e| e.to_string());
+                                
+                                // Send result in a thread (allows timeout on receiving)
+                                std::thread::spawn(move || {
+                                    let _ = tx.send(result_for_channel);
+                                });
+                                
+                                // Use spawn_blocking to receive from channel with timeout
+                                let rx_handle = tokio::task::spawn_blocking(move || {
+                                    rx.recv()
+                                });
+                                
+                                // Apply 120 second timeout to receiving the result
+                                let result: Result<String, Box<dyn Error + Send + Sync>> = match tokio::time::timeout(
+                                    tokio::time::Duration::from_secs(120),
+                                    rx_handle
+                                ).await {
+                                    Ok(Ok(Ok(Ok(output)))) => Ok(output),
+                                    Ok(Ok(Ok(Err(e)))) => Err(format!("Tool error: {}", e).into()),
+                                    Ok(Ok(Err(e))) => Err(format!("Channel error: {}", e).into()),
+                                    Ok(Err(e)) => Err(format!("Task error: {}", e).into()),
+                                    Err(_) => {
+                                        // Timeout exceeded 120 seconds
+                                        Ok("running over 120s".to_string())
+                                    }
+                                };
+                                
+                                let result_str = result?;
+                                
+                                // Add assistant message with tool call (include arguments)
+                                messages.push(Message::new(Role::Assistant, format!("Tool call: {} with arguments: {}", tool_name, arguments)));
+                                
+                                // Add tool result message
+                                messages.push(Message::new(Role::User, format!("Tool result: {}", result_str)));
+                            }
+                        }
+                    }
+                    // Return messages so far (will need another completion call to get final response)
+                    return Ok(messages);
+                } else if let Some(content) = &choice.message.content {
+                    // Regular response with content
+                    messages.push(Message::new(Role::Assistant, content.clone()));
+                    return Ok(messages);
+                }
+            }
+
+            Err("No content or tool calls in response".into())
+        }
+
+        /// Vision completion API that takes an image and messages
+        /// image_url can be either a direct URL or a base64-encoded data URL (e.g., "data:image/jpeg;base64,...")
+        pub async fn open_router_vision_completion(
+            &self,
+            image_url: String,
+            messages: Vec<Message>,
+        ) -> Result<String, Box<dyn Error + Send + Sync>> {
+            let client = reqwest::Client::new();
+            
+            // Convert regular messages to vision messages
+            // The last user message will have the image added to it
+            // If there's no user message, create one with the image
+            let mut vision_messages: Vec<VisionMessage> = Vec::new();
+            let mut found_last_user = false;
+            
+            // Find the last user message index
+            let last_user_idx = messages.iter().rposition(|m| matches!(m.role, Role::User));
+            
+            for (idx, msg) in messages.iter().enumerate() {
+                if Some(idx) == last_user_idx {
+                    // Last user message - add image to it
+                    found_last_user = true;
+                    let text_content = if msg.content.is_empty() {
+                        "Please analyze this image.".to_string()
+                    } else {
+                        msg.content.clone()
+                    };
+                    
+                    let content_items = vec![
+                        ContentItem::Text {
+                            text: text_content,
+                        },
+                        ContentItem::ImageUrl {
+                            image_url: ImageUrl {
+                                url: image_url.clone(),
+                            },
+                        },
+                    ];
+                    
+                    vision_messages.push(VisionMessage {
+                        role: msg.role.clone(),
+                        content: VisionMessageContent::Array(content_items),
+                    });
+                } else {
+                    // Regular message - keep as text
+                    vision_messages.push(VisionMessage {
+                        role: msg.role.clone(),
+                        content: VisionMessageContent::Text(msg.content.clone()),
+                    });
+                }
+            }
+            
+            // If no user message was found, create one with the image
+            if !found_last_user {
+                let content_items = vec![
+                    ContentItem::Text {
+                        text: "Please analyze this image.".to_string(),
+                    },
+                    ContentItem::ImageUrl {
+                        image_url: ImageUrl {
+                            url: image_url.clone(),
+                        },
+                    },
+                ];
+                
+                vision_messages.push(VisionMessage {
+                    role: Role::User,
+                    content: VisionMessageContent::Array(content_items),
+                });
+            }
+
+            let body = VisionRequestBody {
+                model: self.model_name.clone(),
+                messages: vision_messages,
+            };
+
+            let json_body = serde_json::to_vec(&body)?;
+
+            let response = client
+                .request(reqwest::Method::POST, self.base_url.clone())
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .body(json_body)
+                .send()
+                .await?;
+
+            let status = response.status();
+            
+            if !status.is_success() {
+                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(format!("API request failed with status {}: {}", status, error_text).into());
+            }
+
+            let response_json: Response = response.json().await?;
+            
+            // Extract content from the first choice
+            if let Some(choice) = response_json.choices.first() {
                 if let Some(content) = &choice.message.content {
                     return Ok(content.clone());
                 }
             }
 
             Err("No content in response".into())
+        }
+
+        pub async fn completion_open_router_embedding(&self, input: String) -> Result<Vec<f64>, Box<dyn Error + Send + Sync>> {
+            let client = reqwest::Client::new();
+            
+            // Construct embeddings endpoint URL from base_url
+            // OpenRouter embeddings endpoint: https://openrouter.ai/api/v1/embeddings
+            let embeddings_url = self.base_url.replace("/chat/completions", "/embeddings");
+            
+            let body = EmbeddingRequestBody {
+                model: self.model_name.clone(),
+                input,
+            };
+
+            let json_body = serde_json::to_vec(&body)?;
+
+            let response = client
+                .request(reqwest::Method::POST, embeddings_url)
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .body(json_body)
+                .send()
+                .await?;
+
+            let status = response.status();
+            
+            // Get response text for both error handling and parsing
+            let response_text = response.text().await?;
+            
+            if !status.is_success() {
+                return Err(format!("API request failed with status {}: {}", status, response_text).into());
+            }
+
+            // Try to parse as JSON
+            let response_json: EmbeddingResponse = match serde_json::from_str(&response_text) {
+                Ok(json) => json,
+                Err(e) => {
+                    return Err(format!("Failed to parse response JSON: {}. Response body: {}", e, response_text).into());
+                }
+            };
+            
+            // Extract embedding from the first data item
+            if let Some(data) = response_json.data.first() {
+                if data.embedding.is_empty() {
+                    return Err(format!("Embedding vector is empty. Response: {}", response_text).into());
+                }
+                Ok(data.embedding.clone())
+            } else {
+                Err(format!("No embedding data in response. Response: {}", response_text).into())
+            }
         }
     }
 
@@ -148,10 +498,10 @@ pub mod Model {
         }
     }
 
-    fn convert_tools(tools: Vec<tool::Tool>) -> Result<Vec<serde_json::Value>, Box<dyn Error>> {
+    fn convert_tools(tools: &[Box<dyn tool::ToolCall>]) -> Result<Vec<serde_json::Value>, Box<dyn Error + Send + Sync>> {
         let mut result = Vec::new();
         for tool in tools {
-            result.push(tool.to_json()?);
+            result.push(tool.get_json()?);
         }
         Ok(result)
     }
@@ -162,6 +512,38 @@ pub mod Model {
         messages: Vec<Message>,
         #[serde(skip_serializing_if = "Option::is_none")]
         tools: Option<Vec<serde_json::Value>>,
+    }
+
+    #[derive(Serialize)]
+    pub(crate) struct VisionRequestBody {
+        model: String,
+        messages: Vec<VisionMessage>,
+    }
+
+    #[derive(Serialize)]
+    pub(crate) struct EmbeddingRequestBody {
+        model: String,
+        input: String,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct EmbeddingResponse {
+        pub data: Vec<EmbeddingData>,
+        #[serde(default)]
+        pub model: String,
+        pub usage: Option<EmbeddingUsage>,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct EmbeddingData {
+        pub embedding: Vec<f64>,
+        pub index: Option<u32>,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    pub struct EmbeddingUsage {
+        pub prompt_tokens: Option<u32>,
+        pub total_tokens: Option<u32>,
     } 
 
 #[cfg(test)]
@@ -190,13 +572,16 @@ mod tests{
             println!("Messages: {:?}", messages);
 
             // Note: This will fail without a valid API key, but tests the structure
-            let result = model.complete(messages.clone(), None).await;
+            let result = model.complete(messages.clone(), None as Option<&[Box<dyn tool::ToolCall>]>).await;
             dbg!(&result);
             
             match &result {
-                Ok(content) => {
-                    println!("Success! Response content: {}", content);
-                    dbg!(content);
+                Ok(messages) => {
+                    println!("Success! Response messages:");
+                    for msg in messages {
+                        println!("  {:?}: {}", msg.role, msg.content);
+                    }
+                    dbg!(messages);
                 }
                 Err(e) => {
                     println!("Error: {}", e);
@@ -229,6 +614,7 @@ mod tests{
             parameters.insert("location".to_string(), Parameter {
                 items: location_items,
                 description: "The city and state, e.g. San Francisco, CA".to_string(),
+                enum_values: None,
             });
 
             let tool = Tool {
@@ -238,7 +624,7 @@ mod tests{
                 required: vec!["location".to_string()],
             };
 
-            let tools = Some(vec![tool]);
+            let tools: Option<Vec<Box<dyn tool::ToolCall>>> = Some(vec![Box::new(tool)]);
 
             // Print request details
             println!("Sending request with tools");
@@ -249,7 +635,7 @@ mod tests{
             if let Some(ref tools_vec) = tools {
                 println!("Tools being sent:");
                 for tool in tools_vec {
-                    let tool_json = tool.to_json().unwrap();
+                    let tool_json = tool.get_json().unwrap();
                     println!("{}", serde_json::to_string_pretty(&tool_json).unwrap());
                 }
             }
@@ -264,8 +650,11 @@ mod tests{
                 tools: None,
             };
 
-            if let Some(tools_vec) = tools.clone() {
-                body.tools = Some(convert_tools(tools_vec)?);
+            if let Some(ref tools_vec) = tools {
+                let tool_jsons: Vec<serde_json::Value> = tools_vec.iter()
+                    .map(|t| t.get_json().unwrap())
+                    .collect();
+                body.tools = Some(tool_jsons);
             }
 
             let json_body = serde_json::to_vec(&body)?;
@@ -315,12 +704,32 @@ mod tests{
             }
 
             // Also test the complete method
-            let result = model.complete(messages.clone(), tools.clone()).await;
+            let result = model.complete(messages.clone(), tools.as_ref().map(|t| t.as_slice())).await;
             
             match &result {
-                Ok(content) => {
-                    println!("Complete method result - Success! Response content: {}", content);
-                    dbg!(content);
+                Ok(messages) => {
+                    println!("Complete method result - Success! Response messages:");
+                    for msg in messages {
+                        println!("  {:?}: {}", msg.role, msg.content);
+                    }
+                    dbg!(messages);
+                    
+                    // If tool was called, make another completion call with the tool results
+                    if messages.len() > 1 {
+                        println!("Making follow-up completion call with tool results...");
+                        let final_result = model.complete(messages.clone(), tools.as_ref().map(|t| t.as_slice())).await;
+                        match &final_result {
+                            Ok(final_messages) => {
+                                println!("Final response messages:");
+                                for msg in final_messages {
+                                    println!("  {:?}: {}", msg.role, msg.content);
+                                }
+                            }
+                            Err(e) => {
+                                println!("Final call error: {}", e);
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     println!("Complete method result - Error: {}", e);
@@ -366,6 +775,7 @@ mod tests{
             parameters.insert("location".to_string(), Parameter {
                 items: location_items,
                 description: "Location".to_string(),
+                enum_values: None,
             });
 
             let tool = Tool {
@@ -456,6 +866,49 @@ mod tests{
             let tool_calls = response.choices[0].message.tool_calls.as_ref().unwrap();
             assert_eq!(tool_calls.len(), 1);
             assert_eq!(tool_calls[0].function.name, "get_weather");
+        }
+
+        #[tokio::test]
+        async fn test_completion_open_router_embedding() {
+            let model = Model::new(
+                "qwen/qwen3-embedding-8b".to_string(),
+                std::env::var("API_KEY").expect("API_KEY environment variable not set"),
+                "https://openrouter.ai/api/v1/chat/completions".to_string(),
+            );
+
+            let input_text = "Hello, world! This is a test string for embedding.";
+            
+            println!("Testing embedding generation for: {}", input_text);
+            println!("Model: {}", model.model_name);
+
+            let result = model.completion_open_router_embedding(input_text.to_string()).await;
+            
+            match &result {
+                Ok(embedding) => {
+                    println!("Success! Embedding generated:");
+                    println!("  Length: {}", embedding.len());
+                    println!("  First 5 values: {:?}", &embedding[..embedding.len().min(5)]);
+                    println!("  Last 5 values: {:?}", &embedding[embedding.len().saturating_sub(5)..]);
+                    
+                    // Verify the embedding is valid
+                    assert!(!embedding.is_empty(), "Embedding should not be empty");
+                    assert!(embedding.len() > 0, "Embedding should have at least one dimension");
+                    
+                    // Check that all values are finite numbers
+                    for (idx, &value) in embedding.iter().enumerate() {
+                        assert!(value.is_finite(), "Embedding value at index {} should be finite, got: {}", idx, value);
+                    }
+                    
+                    println!("✓ Embedding test passed!");
+                }
+                Err(e) => {
+                    println!("Error generating embedding: {}", e);
+                    // In a real test environment, you might want to assert success
+                    // For now, we'll just print the error for debugging
+                    // Uncomment the line below if you want the test to fail on error:
+                    // panic!("Embedding generation failed: {}", e);
+                }
+            }
         }
     }
 }

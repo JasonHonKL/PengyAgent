@@ -1,1 +1,11 @@
 pub mod tool;
+pub mod bash;
+pub mod todo;
+pub mod grep;
+pub mod edit;
+pub mod web;
+pub mod docs_researcher;
+pub mod docs_reader;
+pub mod vector_search;
+pub mod vision_judge;
+pub mod github_tool;
