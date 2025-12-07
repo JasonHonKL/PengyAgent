@@ -486,7 +486,7 @@ impl App {
             ("/models", "select model"),
             ("/agents", "select agent"),
             ("/settings", "configure API key / model / base URL"),
-            ("/baseurl", "select provider base URL"),
+            ("/baseurl", "select provider base URL (required for custom models)"),
             ("/help", "show help"),
             ("/clear", "clear conversation and reset agent"),
         ]
