@@ -8,6 +8,7 @@ pub mod test_agent {
     use crate::tool::todo::todo::TodoTool;
     use crate::tool::web::web::WebTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
+    use crate::tool::end::end::EndTool;
     use crate::tool::tool::tool::ToolCall;
 
     /// Creates a test agent with the following tools:
@@ -17,6 +18,7 @@ pub mod test_agent {
     /// - grep: Search file contents using regular expressions
     /// - todo: Manage a todo list (read, insert, tick, delete tasks)
     /// - web: Fetch content from URLs using HTTP/HTTPS
+    /// - end: End the current agent run early with an optional reason
     /// 
     /// This agent is responsible for testing code implemented by the coder agent.
     /// It creates test cases in the 'test' folder and ensures comprehensive test coverage.
@@ -34,6 +36,7 @@ pub mod test_agent {
         let todo_tool = TodoTool::new();
         let web_tool = WebTool::new();
         let summarizer_tool = SummarizerTool::new();
+        let end_tool = EndTool::new();
 
         // Convert tools to Box<dyn ToolCall>
         let tools: Vec<Box<dyn ToolCall>> = vec![
@@ -44,6 +47,7 @@ pub mod test_agent {
             Box::new(todo_tool),
             Box::new(web_tool),
             Box::new(summarizer_tool),
+            Box::new(end_tool),
         ];
 
         // Get current working directory for system prompt
@@ -63,6 +67,7 @@ Available tools:
 - grep: Search file contents using regular expressions with ripgrep integration. Searches for patterns in files and returns matching lines with file paths and line numbers. Use this to find code to test, understand function signatures, and locate existing test files.
 - todo: Manage a todo list. Use 'read' action to view all tasks, or 'modify' action with 'tick', 'insert', or 'delete' operations to update the list. Use this to track test coverage, test cases to write, and testing progress.
 - web: Fetch content from a URL using HTTP/HTTPS. Returns the HTML or text content of the webpage. Useful for searching the web, reading testing documentation, or accessing testing best practices.
+- end: End the current agent run immediately. Use when the user explicitly asks to stop or wrap up. You may include a brief reason.
 
 TESTING WORKFLOW:
 1. First, check if a 'test' folder exists in the current working directory using bash commands (ls, test -d, etc.)

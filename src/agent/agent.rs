@@ -178,6 +178,28 @@ pub mod agent {
                                     }
                                 }
                                 
+                                // Check if end tool was called to terminate early
+                                if tool_name.as_deref() == Some("end") || tool_name.as_deref() == Some("endtool") ||
+                                    tool_result.as_deref().map(|r| r.starts_with("END_CONVERSATION")).unwrap_or(false) {
+                                    let content = if let Some(result) = tool_result {
+                                        if let Some(reason) = result.strip_prefix("END_CONVERSATION: ") {
+                                            format!("Ending conversation early: {}", reason)
+                                        } else if result == "END_CONVERSATION" {
+                                            "Ending conversation early as requested.".to_string()
+                                        } else {
+                                            format!("Ending conversation early: {}", result)
+                                        }
+                                    } else {
+                                        "Ending conversation early as requested.".to_string()
+                                    };
+
+                                    let mut updated_messages = messages.clone();
+                                    updated_messages.push(Message::new(Role::Assistant, content.clone()));
+                                    self.messages = updated_messages;
+                                    callback(AgentEvent::FinalResponse { content });
+                                    return;
+                                }
+
                                 // Check if summarizer tool was called
                                 if tool_name.as_deref() == Some("summarizer") && tool_result.as_deref() == Some("SUMMARIZE_CONVERSATION") {
                                     // Handle summarization

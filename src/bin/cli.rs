@@ -5,6 +5,7 @@ use pengy_agent::agent::code_researcher::code_researcher::create_code_researcher
 use pengy_agent::agent::test_agent::test_agent::create_test_agent;
 use pengy_agent::agent::pengy_agent::pengy_agent::run_pengy_agent;
 use pengy_agent::agent::control_agent::control_agent::create_control_agent;
+use pengy_agent::agent::issue_agent::issue_agent::create_issue_agent;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -51,6 +52,7 @@ enum AgentType {
     TestAgent,      // Testing agent
     PengyAgent,     // Meta-agent (orchestrates all three)
     ControlAgent,   // Git and GitHub control agent
+    IssueAgent,     // Issue finder and reporter
 }
 
 #[derive(Clone)]
@@ -293,6 +295,7 @@ impl App {
             ("Test Agent", "Testing agent for code validation", AgentType::TestAgent),
             ("Pengy Agent", "Meta-agent (orchestrates all three agents)", AgentType::PengyAgent),
             ("Control Agent", "Git and GitHub control agent (read diff, commit, list issues, create PR)", AgentType::ControlAgent),
+            ("Issue Agent", "Find and publish GitHub issues with cleanup workflow", AgentType::IssueAgent),
         ]
     }
 
@@ -362,6 +365,15 @@ impl App {
             }
             AgentType::ControlAgent => {
                 let agent = create_control_agent(
+                    model,
+                    None,
+                    Some(3),
+                    Some(20),
+                );
+                self.agent = Some(agent);
+            }
+            AgentType::IssueAgent => {
+                let agent = create_issue_agent(
                     model,
                     None,
                     Some(3),

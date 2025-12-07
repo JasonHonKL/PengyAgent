@@ -4,6 +4,7 @@ pub mod control_agent {
     use crate::tool::bash::bash::BashTool;
     use crate::tool::github_tool::github_tool::GithubTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
+    use crate::tool::end::end::EndTool;
     use crate::tool::tool::tool::ToolCall;
 
     /// Creates a control agent specialized in Git and GitHub operations.
@@ -12,6 +13,7 @@ pub mod control_agent {
     /// - Make commits with appropriate messages
     /// - List issues from GitHub repositories
     /// - Create pull requests
+    /// - End the run early when requested
     /// 
     /// The agent uses bash for git operations and the github tool for GitHub interactions.
     pub fn create_control_agent(
@@ -24,12 +26,14 @@ pub mod control_agent {
         let bash_tool = BashTool::new();
         let github_tool = GithubTool::new();
         let summarizer_tool = SummarizerTool::new();
+        let end_tool = EndTool::new();
 
         // Convert tools to Box<dyn ToolCall>
         let tools: Vec<Box<dyn ToolCall>> = vec![
             Box::new(bash_tool),
             Box::new(github_tool),
             Box::new(summarizer_tool),
+            Box::new(end_tool),
         ];
 
         // Get current working directory for system prompt
@@ -66,6 +70,7 @@ Available tools:
   - 'view_pr': View a specific PR by number
   - 'create_issue': Create a new issue (requires title and body)
   - 'create_pr': Create a new pull request (requires title, body, and head branch)
+- **end**: End the current control agent run immediately. Use when the user explicitly asks to stop or wrap up. You may include a brief reason.
 
 Workflow:
 1. When asked to review changes, first run 'git status' and 'git diff' to understand what has changed.

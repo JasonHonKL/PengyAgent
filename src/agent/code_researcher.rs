@@ -10,6 +10,7 @@ pub mod code_researcher {
     use crate::tool::vector_search::vector_search::VectorSearchTool;
     use crate::tool::web::web::WebTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
+    use crate::tool::end::end::EndTool;
     use crate::tool::tool::tool::ToolCall;
 
     /// Creates a code researcher agent with the following tools:
@@ -21,6 +22,7 @@ pub mod code_researcher {
     /// - todo: Manage a todo list (read, insert, tick, delete tasks)
     /// - vector_search: Perform semantic vector search across multiple text files
     /// - web: Fetch content from URLs using HTTP/HTTPS
+    /// - end: End the current agent run early with an optional reason
     /// 
     /// This agent is designed to research codebases and generate research reports.
     /// The vector_search tool requires API credentials for embedding generation.
@@ -51,6 +53,7 @@ pub mod code_researcher {
         
         let web_tool = WebTool::new();
         let summarizer_tool = SummarizerTool::new();
+        let end_tool = EndTool::new();
 
         // Convert tools to Box<dyn ToolCall>
         let tools: Vec<Box<dyn ToolCall>> = vec![
@@ -63,6 +66,7 @@ pub mod code_researcher {
             Box::new(vector_search_tool),
             Box::new(web_tool),
             Box::new(summarizer_tool),
+            Box::new(end_tool),
         ];
 
         // Get current working directory for system prompt
@@ -84,6 +88,7 @@ Available tools:
 - todo: Manage a todo list. Use 'read' action to view all tasks, or 'modify' action with 'tick', 'insert', or 'delete' operations to update the list. Use this to track research tasks and findings.
 - vector_search: Perform semantic vector search across multiple text files. Takes a list of files, chunks them, embeds the query and chunks, then returns the top K most similar chunks. Only text files can be searched directly - PDF files must be converted to markdown first using docs_reader tool. Use this to find semantically similar code or documentation across the codebase.
 - web: Fetch content from a URL using HTTP/HTTPS. Returns the HTML or text content of the webpage. Useful for searching the web, reading documentation, or accessing online resources.
+- end: End the current agent run immediately. Use when the user explicitly asks to stop or wrap up. You may include a brief reason.
 
 RESEARCH WORKFLOW:
 1. Start by exploring the codebase structure using bash commands (ls, find, tree, etc.)

@@ -312,7 +312,11 @@ pub mod model {
                                     }
                                 };
                                 
-                                let result_str = result?;
+                                // Return tool errors to the LLM as tool results instead of aborting the completion
+                                let result_str = match result {
+                                    Ok(output) => output,
+                                    Err(e) => format!("Tool error: {}", e),
+                                };
                                 
                                 // Add assistant message with tool call (include arguments)
                                 messages.push(Message::new(Role::Assistant, format!("Tool call: {} with arguments: {}", tool_name, arguments)));

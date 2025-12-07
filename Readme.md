@@ -2,6 +2,18 @@
 
 A terminal-based chat interface for interacting with AI agents and LLMs.
 
+## Why PengyAgent
+
+This repository is intended for both industrial and academic use. Therefore, our plan has two main purposes.
+
+First, for industrial settings, we do not focus on just one coding agent. Since there are many teams such as Cursor, OpenCode, Codex, and Trae, our focus is to automate partial tasks. This means we split the work into multiple small agents, each focusing on certain subtasks and specific tools. This approach allows users to handle different tasks without relying solely on a general-purpose agent.
+
+Second, for academic settings, this repository aims to provide a training setup for agents. This means large language models (LLMs) can use this environment to learn how to use specific tools. Our ultimate goal is to address the following problems:
+
+1. Every time new tools are designed, others cannot easily reuse them.
+2. It is difficult to distill knowledge from a teacher LLM model to a student model within an agent setup.
+
+
 ## Building
 
 Build the CLI binary:
