@@ -283,43 +283,96 @@ pub mod model {
 
         pub async fn complete(&self, mut messages: Vec<Message> , tools: Option<&[Box<dyn tool::ToolCall>]>) -> Result<Vec<Message> , Box<dyn Error + Send + Sync>>{
 
-            let client = reqwest::Client::new();
-            let mut req_builder = client.request(reqwest::Method::POST, self.completion_url());
-
-            let mut outbound_messages = messages.clone();
-            self.ensure_reasoning_messages(&mut outbound_messages);
-
-            let mut body = RequestBody{
-                model: self.model_name.clone(),
-                messages: outbound_messages,
-                tools: None,
-            };
-
-            if let Some(ref tools_vec) = tools {
-                body.tools = Some(convert_tools(tools_vec)?);
-            }
-
-            let json_body = serde_json::to_vec(&body)?;
-
-            req_builder = req_builder
-                .header("Content-Type", "application/json")
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .body(json_body);
-
+            // Retry logic: try up to 3 times for connection errors
+            const MAX_RETRIES: u32 = 3;
+            let mut retry_count = 0;
             
-            let response = req_builder.send().await?;
-            let status = response.status();
-            
-            if !status.is_success() {
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(format!("API request failed with status {}: {}", status, error_text).into());
-            }
+            loop {
+                let client = reqwest::Client::new();
+                let mut req_builder = client.request(reqwest::Method::POST, self.completion_url());
 
-            let response_json: Response = response.json().await?;
-            
-            // Extract content from the first choice
-            if let Some(choice) = response_json.choices.first() {
-                let reasoning_from_response = choice.message.reasoning_content.clone();
+                let mut outbound_messages = messages.clone();
+                self.ensure_reasoning_messages(&mut outbound_messages);
+
+                let mut body = RequestBody{
+                    model: self.model_name.clone(),
+                    messages: outbound_messages,
+                    tools: None,
+                };
+
+                if let Some(ref tools_vec) = tools {
+                    body.tools = Some(convert_tools(tools_vec)?);
+                }
+
+                let json_body = match serde_json::to_vec(&body) {
+                    Ok(v) => v,
+                    Err(e) => return Err(format!("Failed to serialize request: {}", e).into()),
+                };
+
+                req_builder = req_builder
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .body(json_body);
+
+                // Try to send the request with retry logic for connection errors
+                let response_result = req_builder.send().await;
+                
+                let response = match response_result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // Check if it's a connection error that we should retry
+                        let is_connection_error = e.is_connect() || 
+                            e.is_timeout() || 
+                            e.to_string().to_lowercase().contains("connection") ||
+                            e.to_string().to_lowercase().contains("network") ||
+                            e.to_string().to_lowercase().contains("dns");
+                        
+                        if is_connection_error && retry_count < MAX_RETRIES {
+                            retry_count += 1;
+                            // Wait before retrying (exponential backoff: 1s, 2s, 4s)
+                            let delay_ms = 1000 * (1 << (retry_count - 1));
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                            continue; // Retry the request
+                        } else {
+                            // Either not a connection error, or we've exhausted retries
+                            if retry_count >= MAX_RETRIES {
+                                return Err(format!("Connection failed after {} attempts: {}", MAX_RETRIES, e).into());
+                            } else {
+                                return Err(format!("Request failed: {}", e).into());
+                            }
+                        }
+                    }
+                };
+                
+                let status = response.status();
+                
+                if !status.is_success() {
+                    let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    // For HTTP errors, don't retry (they're not connection issues)
+                    return Err(format!("API request failed with status {}: {}", status, error_text).into());
+                }
+
+                // Try to parse the response JSON
+                let response_json_result = response.json().await;
+                let response_json: Response = match response_json_result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // JSON parsing error - might be a connection issue, retry if we haven't exhausted retries
+                        if retry_count < MAX_RETRIES {
+                            retry_count += 1;
+                            let delay_ms = 1000 * (1 << (retry_count - 1));
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                            continue; // Retry the request
+                        } else {
+                            return Err(format!("Failed to parse response after {} attempts: {}", MAX_RETRIES, e).into());
+                        }
+                    }
+                };
+                
+                // Successfully got response - process it
+                // Extract content from the first choice
+                if let Some(choice) = response_json.choices.first() {
+                    let reasoning_from_response = choice.message.reasoning_content.clone();
 
                 // Check if there are tool calls
                 if let Some(tool_calls) = &choice.message.tool_calls {
@@ -425,9 +478,11 @@ pub mod model {
                     messages.push(assistant_msg);
                     return Ok(messages);
                 }
-            }
-
-            Err("No content or tool calls in response".into())
+                }
+                
+                // If we get here, no content was found - this shouldn't happen but handle it
+                return Err("No content or tool calls in response".into());
+            } // end of retry loop
         }
 
         /// Vision completion API that takes an image and messages

@@ -47,6 +47,7 @@ enum AppState {
     CustomModel,
     AgentSelector,
     SessionSelector,
+    BaseUrlSelector,
 }
 
 #[derive(Clone, PartialEq, Debug, Copy)]
@@ -447,7 +448,7 @@ impl App {
                 provider: "GLM".to_string(),
                 base_url: DEFAULT_BASE_URL.to_string(),
             },
-            // Provider Base URLs (for easy selection)
+            // Provider Base URLs (for quick selection)
             ModelOption {
                 name: "Provider: Mistral".to_string(),
                 provider: "Mistral".to_string(),
@@ -464,12 +465,12 @@ impl App {
                 base_url: "https://openrouter.ai/api/v1".to_string(),
             },
             ModelOption {
-                name: "Provider: OpenAI (ChatGPT)".to_string(),
+                name: "Provider: OpenAI".to_string(),
                 provider: "OpenAI".to_string(),
                 base_url: "https://api.openai.com/v1".to_string(),
             },
             ModelOption {
-                name: "Provider: Anthropic (Claude)".to_string(),
+                name: "Provider: Anthropic".to_string(),
                 provider: "Anthropic".to_string(),
                 base_url: "https://api.anthropic.com/v1".to_string(),
             },
@@ -492,6 +493,7 @@ impl App {
             ("/models", "select model"),
             ("/agents", "select agent"),
             ("/settings", "configure API key / model / base URL"),
+            ("/baseurl", "select provider base URL"),
             ("/help", "show help"),
             ("/clear", "clear conversation and reset agent"),
         ]
@@ -727,7 +729,7 @@ impl App {
                     // This avoids showing "running" state and duplication
                     if let Some((tool_id, name, args_str)) = self.pending_tool_calls.pop() {
                         // Create tool call message directly with success status
-                    self.chat_messages.push(ChatMessage::ToolCall {
+                        self.chat_messages.push(ChatMessage::ToolCall {
                             id: tool_id.clone(),
                             name: name.clone(),
                             args: args_str.clone(),
@@ -816,50 +818,7 @@ fn handle_welcome_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio:
                                     if app.initialize_model().is_ok() {
                                         app.state = AppState::Chat;
                                         if !app.chat_input.trim().is_empty() {
-                                            // Use handle to spawn without blocking
-                                            let handle = rt.handle().clone();
-                                            let user_input = app.chat_input.clone();
-                                            app.chat_input.clear();
-                                            app.input_cursor = 0;
-                                            app.chat_messages.push(ChatMessage::User(user_input.clone()));
-                                            app.loading = true;
-                                            app.error = None;
-                                            app.user_scrolled = false;
-                                            
-                                            // Clone what we need for async
-                                            let tx = app.tx.clone();
-                                            let model_option = app.selected_model.clone();
-                                            let api_key = app.api_key.clone();
-                                            let model = app.model.clone();
-                                            
-                                            handle.spawn(async move {
-                                                // Recreate minimal app state for send_message logic
-                                                // Since send_message spawns tasks, we just need to trigger it
-                                                // But we've already done the state updates above
-                                                // So we just spawn the agent work directly
-                                                if let Some(model) = model {
-                                                    let base_url = model_option
-                                                        .as_ref()
-                                                        .map(|m| App::normalize_base_url(&m.base_url))
-                                                        .unwrap_or_default();
-                                                    
-                                                    let callback_tx = tx.clone();
-                                                    let callback = move |event: AgentEvent| {
-                                                        let _ = callback_tx.send(event);
-                                                    };
-                                                    
-                                                    let _ = run_pengy_agent(
-                                                        model,
-                                                        api_key,
-                                                        base_url,
-                                                        Some("openai/text-embedding-3-small".to_string()),
-                                                        user_input,
-                                                        Some(3),
-                                                        Some(50),
-                                                        callback
-                                                    ).await;
-                                                }
-                                            });
+                                            rt.block_on(app.send_message())?;
                                         }
                                     }
                                 }
@@ -906,67 +865,8 @@ fn handle_chat_key(app: &mut App, key: crossterm::event::KeyCode, rt: &tokio::ru
                 }
                 handle_command_inline(app, &cmd, AppState::Chat);
             } else if !app.chat_input.trim().is_empty() {
-                // Use handle to spawn without blocking to avoid runtime conflicts
-                let handle = rt.handle().clone();
-                let user_input = app.chat_input.clone();
-                app.chat_input.clear();
-                app.input_cursor = 0;
+                rt.block_on(app.send_message())?;
                 app.show_command_hints = false;
-                app.chat_messages.push(ChatMessage::User(user_input.clone()));
-                app.loading = true;
-                app.error = None;
-                app.user_scrolled = false;
-                
-                // Clone what we need for async
-                let tx = app.tx.clone();
-                let agent_tx = app.agent_tx.clone();
-                let model_option = app.selected_model.clone();
-                let api_key = app.api_key.clone();
-                let selected_agent = app.selected_agent;
-                let model = app.model.clone();
-                let agent = app.agent.take();
-                
-                handle.spawn(async move {
-                    match selected_agent {
-                        AgentType::PengyAgent => {
-                            if let Some(model) = model {
-                                let base_url = model_option
-                                    .as_ref()
-                                    .map(|m| App::normalize_base_url(&m.base_url))
-                                    .unwrap_or_default();
-                                
-                                let callback_tx = tx.clone();
-                                let callback = move |event: AgentEvent| {
-                                    let _ = callback_tx.send(event);
-                                };
-                                
-                                let _ = run_pengy_agent(
-                                    model,
-                                    api_key,
-                                    base_url,
-                                    Some("openai/text-embedding-3-small".to_string()),
-                                    user_input,
-                                    Some(3),
-                                    Some(50),
-                                    callback
-                                ).await;
-                            }
-                        }
-                        _ => {
-                            if let Some(mut agent_to_run) = agent {
-                                let callback_tx = tx.clone();
-                                let callback = move |event: AgentEvent| {
-                                    let _ = callback_tx.send(event);
-                                };
-                                
-                                agent_to_run.run(user_input, callback).await;
-                                
-                                // Return the agent after completion
-                                let _ = agent_tx.send(agent_to_run);
-                            }
-                        }
-                    }
-                });
             }
         }
         crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Down | 
@@ -1028,28 +928,46 @@ fn handle_command_inline(app: &mut App, cmd: &str, previous_state: AppState) {
     if cmd.starts_with("/models") {
         app.previous_state = Some(previous_state);
                                         app.state = AppState::ModelSelector;
-        app.model_search_focused = true;  // Default to search active
-        app.search_query.clear();
     } else if cmd.starts_with("/agents") {
         app.previous_state = Some(previous_state);
                                         app.state = AppState::AgentSelector;
     } else if cmd.starts_with("/settings") {
         app.previous_state = Some(previous_state);
-                                        app.state = AppState::Settings;
-                                        app.error = None;
-                                        app.settings_api_key = app.api_key.clone();
-                                        app.settings_base_url = app
+        app.state = AppState::Settings;
+        app.error = None;
+        app.settings_api_key = app.api_key.clone();
+        app.settings_base_url = app
                                             .selected_model
                                             .as_ref()
                                             .map(|m| m.base_url.clone())
                                             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
                                         app.settings_field = 0;
+                                        // Find and select the currently selected model in the list
                                         let models = App::get_available_models();
                                         if let Some(selected) = &app.selected_model {
-                                            if let Some(idx) = models.iter().position(|m| m.name == selected.name) {
+                                            if let Some(idx) = models.iter().position(|m| m.name == selected.name && m.provider == selected.provider) {
                                                 app.model_list_state.select(Some(idx));
                                             }
                                         }
+    } else if cmd.starts_with("/baseurl") {
+        app.previous_state = Some(previous_state);
+        app.state = AppState::BaseUrlSelector;
+        app.model_search_focused = true;  // Default to search active
+        app.search_query.clear();
+        // Find and select the currently selected provider if any
+        let models = App::get_available_models();
+        let provider_models: Vec<&ModelOption> = models.iter()
+            .filter(|m| m.name.starts_with("Provider:"))
+            .collect();
+        if let Some(ref selected) = app.selected_model {
+            if let Some(idx) = provider_models.iter().position(|m| m.base_url == selected.base_url) {
+                app.model_list_state.select(Some(idx));
+            } else {
+                app.model_list_state.select(Some(0));
+            }
+        } else {
+            app.model_list_state.select(Some(0));
+        }
     } else if cmd.starts_with("/help") {
         app.previous_state = Some(previous_state);
                                         app.state = AppState::Help;
@@ -1071,7 +989,266 @@ fn handle_command_inline(app: &mut App, cmd: &str, previous_state: AppState) {
                                     app.show_command_hints = false;
 }
 
+/// Parse command-line arguments for cmd mode
+/// Returns: (prompt, agent, model, provider, api_key, base_url)
+fn parse_cmd_args() -> Option<(String, String, String, String, String, Option<String>)> {
+    let args: Vec<String> = env::args().collect();
+    
+    // Check if we have at least some arguments (minimum 6 for required args)
+    if args.len() < 6 {
+        return None;
+    }
+    
+    let mut prompt = None;
+    let mut agent = None;
+    let mut model = None;
+    let mut provider = None;
+    let mut api_key = None;
+    let mut base_url = None;
+    
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--prompt" => {
+                if i + 1 < args.len() {
+                    prompt = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return None;
+                }
+            }
+            "--agent" => {
+                if i + 1 < args.len() {
+                    agent = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return None;
+                }
+            }
+            "--model" => {
+                if i + 1 < args.len() {
+                    model = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return None;
+                }
+            }
+            "--provider" => {
+                if i + 1 < args.len() {
+                    provider = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return None;
+                }
+            }
+            "--api-key" => {
+                if i + 1 < args.len() {
+                    api_key = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return None;
+                }
+            }
+            "--base-url" => {
+                if i + 1 < args.len() {
+                    base_url = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    return None;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    
+    if let (Some(p), Some(a), Some(m), Some(pr), Some(k)) = (prompt, agent, model, provider, api_key) {
+        Some((p, a, m, pr, k, base_url))
+    } else {
+        None
+    }
+}
+
+/// Convert agent string to AgentType
+fn parse_agent_type(agent_str: &str) -> Result<AgentType, Box<dyn Error>> {
+    match agent_str.to_lowercase().as_str() {
+        "coder" | "coder agent" => Ok(AgentType::Coder),
+        "code researcher" | "code-researcher" | "researcher" => Ok(AgentType::CodeResearcher),
+        "test agent" | "test-agent" | "test" => Ok(AgentType::TestAgent),
+        "pengy agent" | "pengy-agent" | "pengy" => Ok(AgentType::PengyAgent),
+        "control agent" | "control-agent" | "control" => Ok(AgentType::ControlAgent),
+        "issue agent" | "issue-agent" | "issue" => Ok(AgentType::IssueAgent),
+        _ => Err(format!("Unknown agent type: {}. Available: coder, code-researcher, test-agent, pengy-agent, control-agent, issue-agent", agent_str).into()),
+    }
+}
+
+/// Run agent in command mode (non-interactive)
+async fn run_cmd_mode(
+    prompt: String,
+    agent_type: AgentType,
+    model_name: String,
+    provider: String,
+    api_key: String,
+    custom_base_url: Option<String>,
+) -> Result<(), Box<dyn Error>> {
+    // Determine base URL based on provider or custom base URL
+    let base_url = if let Some(custom_url) = custom_base_url {
+        App::normalize_base_url(&custom_url)
+    } else if provider.to_lowercase() == "custom" {
+        // For custom provider without base URL, use default
+        DEFAULT_BASE_URL.to_string()
+    } else {
+        // Try to find the base URL from available models
+        let models = App::get_available_models();
+        let found_model = models.iter().find(|m| {
+            m.name == model_name && m.provider.to_lowercase() == provider.to_lowercase()
+        });
+        
+        if let Some(m) = found_model {
+            App::normalize_base_url(&m.base_url)
+        } else {
+            // Default to OpenRouter if not found
+            DEFAULT_BASE_URL.to_string()
+        }
+    };
+    
+    let model = Model::new(model_name.clone(), api_key.clone(), base_url.clone());
+    
+    // Print initial info
+    println!("Running agent in command mode...");
+    println!("Agent: {:?}", agent_type);
+    println!("Model: {} ({})", model_name, provider);
+    println!("Prompt: {}\n", prompt);
+    
+    // Create callback to print events
+    let callback = |event: AgentEvent| {
+        match event {
+            AgentEvent::Step { step, max_steps } => {
+                println!("[Step {}/{}]", step, max_steps);
+            }
+            AgentEvent::ToolCall { tool_name, args } => {
+                println!("[Tool Call] {} with args: {}", tool_name, args);
+            }
+            AgentEvent::ToolResult { result } => {
+                println!("[Tool Result] {}", result);
+            }
+            AgentEvent::Thinking { content } => {
+                println!("[Thinking] {}", content);
+            }
+            AgentEvent::FinalResponse { content } => {
+                println!("\n[Final Response]\n{}", content);
+            }
+            AgentEvent::Error { error } => {
+                eprintln!("[Error] {}", error);
+            }
+            AgentEvent::VisionAnalysis { status } => {
+                println!("[Vision] {}", status);
+            }
+        }
+    };
+    
+    // Run the appropriate agent
+    match agent_type {
+        AgentType::PengyAgent => {
+            let _ = run_pengy_agent(
+                model,
+                api_key,
+                base_url,
+                Some("openai/text-embedding-3-small".to_string()),
+                prompt,
+                Some(3),
+                Some(50),
+                callback,
+            ).await;
+        }
+        AgentType::Coder => {
+            let mut agent = create_coder_agent(
+                model,
+                None,
+                Some(3),
+                Some(50),
+            );
+            agent.run(prompt, callback).await;
+        }
+        AgentType::CodeResearcher => {
+            let mut agent = create_code_researcher_agent(
+                model,
+                api_key,
+                base_url,
+                Some("openai/text-embedding-3-small".to_string()),
+                None,
+                Some(3),
+                Some(50),
+            );
+            agent.run(prompt, callback).await;
+        }
+        AgentType::TestAgent => {
+            let mut agent = create_test_agent(
+                model,
+                None,
+                Some(3),
+                Some(50),
+            );
+            agent.run(prompt, callback).await;
+        }
+        AgentType::ControlAgent => {
+            let mut agent = create_control_agent(
+                model,
+                None,
+                Some(3),
+                Some(50),
+            );
+            agent.run(prompt, callback).await;
+        }
+        AgentType::IssueAgent => {
+            let mut agent = create_issue_agent(
+                model,
+                None,
+                Some(3),
+                Some(50),
+            );
+            agent.run(prompt, callback).await;
+        }
+    }
+    
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
+    // Check if we're in command mode
+    if let Some((prompt, agent_str, model, provider, api_key, base_url)) = parse_cmd_args() {
+        // Run in command mode
+        let rt = tokio::runtime::Runtime::new()?;
+        match parse_agent_type(&agent_str) {
+            Ok(agent_type) => {
+                rt.block_on(run_cmd_mode(prompt, agent_type, model, provider, api_key, base_url))?;
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                eprintln!("\nUsage: pengy --prompt \"<prompt>\" --agent <agent-type> --model <model-name> --provider <provider> --api-key <api-key> [--base-url <base-url>]");
+                eprintln!("\nRequired arguments:");
+                eprintln!("  --prompt \"<prompt>\"        The prompt/question for the agent");
+                eprintln!("  --agent <agent-type>        The agent type to use");
+                eprintln!("  --model <model-name>        The model name (e.g., openai/gpt-4o)");
+                eprintln!("  --provider <provider>       The provider name (e.g., OpenAI, Custom)");
+                eprintln!("  --api-key <api-key>         Your API key");
+                eprintln!("\nOptional arguments:");
+                eprintln!("  --base-url <base-url>       Custom base URL (required for Custom provider)");
+                eprintln!("\nAvailable agent types:");
+                eprintln!("  - coder");
+                eprintln!("  - code-researcher");
+                eprintln!("  - test-agent");
+                eprintln!("  - pengy-agent");
+                eprintln!("  - control-agent");
+                eprintln!("  - issue-agent");
+                eprintln!("\nExample:");
+                eprintln!("  pengy --prompt \"Write a hello world function\" --agent coder --model openai/gpt-4o --provider OpenAI --api-key sk-...");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+    
+    // Otherwise, run in TUI mode
     let rt = tokio::runtime::Runtime::new()?;
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -1137,68 +1314,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     AppState::ModelSelector => {
                         match key.code {
-                            crossterm::event::KeyCode::Esc => {
-                                if app.model_search_focused {
-                                    app.model_search_focused = false;
-                                    app.search_query.clear();
-                                } else {
-                                    app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
-                                }
-                            },
-                            crossterm::event::KeyCode::Tab => {
-                                app.model_search_focused = !app.model_search_focused;
-                                if !app.model_search_focused {
-                                    // Reset selection when switching back to list
-                                    let all_models = App::get_available_models();
-                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                        all_models.iter().collect()
-                                    } else {
-                                        let query_lower = app.search_query.to_lowercase();
-                                        all_models.iter()
-                                            .filter(|m| {
-                                                m.name.to_lowercase().contains(&query_lower) ||
-                                                m.provider.to_lowercase().contains(&query_lower) ||
-                                                m.base_url.to_lowercase().contains(&query_lower)
-                                            })
-                                            .collect()
-                                    };
-                                    if !filtered.is_empty() {
-                                        app.model_list_state.select(Some(0));
-                                    }
-                                }
-                            },
+                            crossterm::event::KeyCode::Esc => app.state = app.previous_state.clone().unwrap_or(AppState::Welcome),
                             crossterm::event::KeyCode::Enter => {
-                                if app.model_search_focused {
-                                    // Switch to list on Enter in search
-                                    app.model_search_focused = false;
-                                } else {
-                                    // Get filtered models
-                                    let all_models = App::get_available_models();
-                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                        all_models.iter().collect()
-                                    } else {
-                                        let query_lower = app.search_query.to_lowercase();
-                                        all_models.iter()
-                                            .filter(|m| {
-                                                m.name.to_lowercase().contains(&query_lower) ||
-                                                m.provider.to_lowercase().contains(&query_lower) ||
-                                                m.base_url.to_lowercase().contains(&query_lower)
-                                            })
-                                            .collect()
-                                    };
-                                    
+                                let models = App::get_available_models();
                                 if let Some(selected) = app.model_list_state.selected() {
-                                        if selected < filtered.len() {
-                                            let model = filtered[selected].clone();
-                                            
-                                            // If it's a provider base URL, just set the base URL and go to settings
-                                            if model.name.starts_with("Provider:") {
-                                                app.settings_api_key = app.api_key.clone();
-                                                app.settings_base_url = model.base_url.clone();
-                                                app.settings_field = 1; // Focus on base URL field
-                                                app.error = None;
-                                                app.state = AppState::Settings;
-                                            } else if model.provider == "Custom" {
+                                    if selected < models.len() {
+                                        let model = models[selected].clone();
+                                        if model.provider == "Custom" {
                                             app.custom_model_field = 0;
                                             app.custom_model_name.clear();
                                             app.state = AppState::CustomModel;
@@ -1214,83 +1336,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                                                 app.settings_field = 0;
                                                 app.error = None;
                                                 app.state = AppState::Settings;
-                                                }
                                             }
                                         }
                                     }
                                 }
                             },
-                            crossterm::event::KeyCode::Up if !app.model_search_focused => {
-                                let all_models = App::get_available_models();
-                                let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                    all_models.iter().collect()
-                                } else {
-                                    let query_lower = app.search_query.to_lowercase();
-                                    all_models.iter()
-                                        .filter(|m| {
-                                            m.name.to_lowercase().contains(&query_lower) ||
-                                            m.provider.to_lowercase().contains(&query_lower) ||
-                                            m.base_url.to_lowercase().contains(&query_lower)
-                                        })
-                                        .collect()
-                                };
+                            crossterm::event::KeyCode::Up => {
                                 let i = app.model_list_state.selected().unwrap_or(0).saturating_sub(1);
-                                app.model_list_state.select(Some(i.min(filtered.len().saturating_sub(1))));
-                            },
-                            crossterm::event::KeyCode::Down if !app.model_search_focused => {
-                                let all_models = App::get_available_models();
-                                let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                    all_models.iter().collect()
-                                } else {
-                                    let query_lower = app.search_query.to_lowercase();
-                                    all_models.iter()
-                                        .filter(|m| {
-                                            m.name.to_lowercase().contains(&query_lower) ||
-                                            m.provider.to_lowercase().contains(&query_lower) ||
-                                            m.base_url.to_lowercase().contains(&query_lower)
-                                        })
-                                        .collect()
-                                };
-                                let i = (app.model_list_state.selected().unwrap_or(0) + 1).min(filtered.len().saturating_sub(1));
                                 app.model_list_state.select(Some(i));
                             },
-                            crossterm::event::KeyCode::Char(c) if app.model_search_focused => {
-                                app.search_query.push(c);
-                                // Auto-select first result when typing
-                                let all_models = App::get_available_models();
-                                let filtered: Vec<&ModelOption> = {
-                                    let query_lower = app.search_query.to_lowercase();
-                                    all_models.iter()
-                                        .filter(|m| {
-                                            m.name.to_lowercase().contains(&query_lower) ||
-                                            m.provider.to_lowercase().contains(&query_lower) ||
-                                            m.base_url.to_lowercase().contains(&query_lower)
-                                        })
-                                        .collect()
-                                };
-                                if !filtered.is_empty() {
-                                    app.model_list_state.select(Some(0));
-                                }
-                            },
-                            crossterm::event::KeyCode::Backspace if app.model_search_focused => {
-                                app.search_query.pop();
-                                // Auto-select first result when deleting
-                                let all_models = App::get_available_models();
-                                let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                    all_models.iter().collect()
-                                } else {
-                                    let query_lower = app.search_query.to_lowercase();
-                                    all_models.iter()
-                                        .filter(|m| {
-                                            m.name.to_lowercase().contains(&query_lower) ||
-                                            m.provider.to_lowercase().contains(&query_lower) ||
-                                            m.base_url.to_lowercase().contains(&query_lower)
-                                        })
-                                        .collect()
-                                };
-                                if !filtered.is_empty() {
-                                    app.model_list_state.select(Some(0));
-                                }
+                            crossterm::event::KeyCode::Down => {
+                                let i = (app.model_list_state.selected().unwrap_or(0) + 1).min(App::get_available_models().len() - 1);
+                                app.model_list_state.select(Some(i));
                             },
                             _ => {}
                         }
@@ -1299,6 +1356,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                     AppState::AgentSelector => {
                         match key.code {
                             crossterm::event::KeyCode::Esc => app.state = app.previous_state.clone().unwrap_or(AppState::Welcome),
+                            crossterm::event::KeyCode::Tab => {
+                                // Switch to next agent
+                                let agents = App::get_available_agents();
+                                let current = app.agent_list_state.selected().unwrap_or(0);
+                                let next = (current + 1) % agents.len();
+                                app.agent_list_state.select(Some(next));
+                                app.selected_agent = agents[next].2;
+                            },
+                            crossterm::event::KeyCode::BackTab => {
+                                // Switch to previous agent
+                                let agents = App::get_available_agents();
+                                let current = app.agent_list_state.selected().unwrap_or(0);
+                                let prev = if current == 0 { agents.len() - 1 } else { current - 1 };
+                                app.agent_list_state.select(Some(prev));
+                                app.selected_agent = agents[prev].2;
+                            },
                             crossterm::event::KeyCode::Enter => {
                                 let agents = App::get_available_agents();
                                 if let Some(selected) = app.agent_list_state.selected() {
@@ -1309,10 +1382,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                             crossterm::event::KeyCode::Up => {
                                 let i = app.agent_list_state.selected().unwrap_or(0).saturating_sub(1);
                                 app.agent_list_state.select(Some(i));
+                                let agents = App::get_available_agents();
+                                app.selected_agent = agents[i].2;
                             },
                             crossterm::event::KeyCode::Down => {
-                                let i = (app.agent_list_state.selected().unwrap_or(0) + 1).min(App::get_available_agents().len() - 1);
+                                let agents = App::get_available_agents();
+                                let i = (app.agent_list_state.selected().unwrap_or(0) + 1).min(agents.len() - 1);
                                 app.agent_list_state.select(Some(i));
+                                app.selected_agent = agents[i].2;
                             },
                             _ => {}
                         }
@@ -1393,12 +1470,175 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                         false
                     },
-                    AppState::CustomModel => {
+                    AppState::BaseUrlSelector => {
                         match key.code {
                             crossterm::event::KeyCode::Esc => {
-                                app.state = AppState::ModelSelector;
-                                app.model_search_focused = true;  // Default to search active
+                                if app.model_search_focused {
+                                    app.model_search_focused = false;
+                                    app.search_query.clear();
+                                } else {
+                                    app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
+                                }
                             },
+                            crossterm::event::KeyCode::Tab => {
+                                app.model_search_focused = !app.model_search_focused;
+                                if !app.model_search_focused {
+                                    let all_models = App::get_available_models();
+                                    let provider_models: Vec<&ModelOption> = all_models.iter()
+                                        .filter(|m| m.name.starts_with("Provider:"))
+                                        .collect();
+                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                        provider_models.iter().copied().collect()
+                                    } else {
+                                        let query_lower = app.search_query.to_lowercase();
+                                        provider_models.iter()
+                                            .filter(|m| {
+                                                m.name.to_lowercase().contains(&query_lower) ||
+                                                m.provider.to_lowercase().contains(&query_lower) ||
+                                                m.base_url.to_lowercase().contains(&query_lower)
+                                            })
+                                            .copied()
+                                            .collect()
+                                    };
+                                    if !filtered.is_empty() {
+                                        app.model_list_state.select(Some(0));
+                                    }
+                                }
+                            },
+                            crossterm::event::KeyCode::Enter => {
+                                if app.model_search_focused {
+                                    app.model_search_focused = false;
+                                } else {
+                                    let all_models = App::get_available_models();
+                                    let provider_models: Vec<&ModelOption> = all_models.iter()
+                                        .filter(|m| m.name.starts_with("Provider:"))
+                                        .collect();
+                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                        provider_models.iter().copied().collect()
+                                    } else {
+                                        let query_lower = app.search_query.to_lowercase();
+                                        provider_models.iter()
+                                            .filter(|m| {
+                                                m.name.to_lowercase().contains(&query_lower) ||
+                                                m.provider.to_lowercase().contains(&query_lower) ||
+                                                m.base_url.to_lowercase().contains(&query_lower)
+                                            })
+                                            .copied()
+                                            .collect()
+                                    };
+                                    
+                                    if let Some(selected) = app.model_list_state.selected() {
+                                        if selected < filtered.len() {
+                                            let provider = filtered[selected];
+                                            // Update settings and selected model
+                                            app.settings_api_key = app.api_key.clone();
+                                            app.settings_base_url = provider.base_url.clone();
+                                            app.settings_field = 1;
+                                            app.error = None;
+                                            
+                                            // Update selected_model's base_url if one exists
+                                            if let Some(ref mut selected) = app.selected_model {
+                                                selected.base_url = provider.base_url.clone();
+                                            }
+                                            
+                                            app.state = AppState::Settings;
+                                        }
+                                    }
+                                }
+                            },
+                            crossterm::event::KeyCode::Up if !app.model_search_focused => {
+                                let all_models = App::get_available_models();
+                                let provider_models: Vec<&ModelOption> = all_models.iter()
+                                    .filter(|m| m.name.starts_with("Provider:"))
+                                    .collect();
+                                let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                    provider_models.iter().copied().collect()
+                                } else {
+                                    let query_lower = app.search_query.to_lowercase();
+                                    provider_models.iter()
+                                        .filter(|m| {
+                                            m.name.to_lowercase().contains(&query_lower) ||
+                                            m.provider.to_lowercase().contains(&query_lower) ||
+                                            m.base_url.to_lowercase().contains(&query_lower)
+                                        })
+                                        .copied()
+                                        .collect()
+                                };
+                                let i = app.model_list_state.selected().unwrap_or(0).saturating_sub(1);
+                                app.model_list_state.select(Some(i.min(filtered.len().saturating_sub(1))));
+                            },
+                            crossterm::event::KeyCode::Down if !app.model_search_focused => {
+                                let all_models = App::get_available_models();
+                                let provider_models: Vec<&ModelOption> = all_models.iter()
+                                    .filter(|m| m.name.starts_with("Provider:"))
+                                    .collect();
+                                let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                    provider_models.iter().copied().collect()
+                                } else {
+                                    let query_lower = app.search_query.to_lowercase();
+                                    provider_models.iter()
+                                        .filter(|m| {
+                                            m.name.to_lowercase().contains(&query_lower) ||
+                                            m.provider.to_lowercase().contains(&query_lower) ||
+                                            m.base_url.to_lowercase().contains(&query_lower)
+                                        })
+                                        .copied()
+                                        .collect()
+                                };
+                                let i = (app.model_list_state.selected().unwrap_or(0) + 1).min(filtered.len().saturating_sub(1));
+                                app.model_list_state.select(Some(i));
+                            },
+                            crossterm::event::KeyCode::Char(c) if app.model_search_focused => {
+                                app.search_query.push(c);
+                                let all_models = App::get_available_models();
+                                let provider_models: Vec<&ModelOption> = all_models.iter()
+                                    .filter(|m| m.name.starts_with("Provider:"))
+                                    .collect();
+                                let filtered: Vec<&ModelOption> = {
+                                    let query_lower = app.search_query.to_lowercase();
+                                    provider_models.iter()
+                                        .filter(|m| {
+                                            m.name.to_lowercase().contains(&query_lower) ||
+                                            m.provider.to_lowercase().contains(&query_lower) ||
+                                            m.base_url.to_lowercase().contains(&query_lower)
+                                        })
+                                        .copied()
+                                        .collect()
+                                };
+                                if !filtered.is_empty() {
+                                    app.model_list_state.select(Some(0));
+                                }
+                            },
+                            crossterm::event::KeyCode::Backspace if app.model_search_focused => {
+                                app.search_query.pop();
+                                let all_models = App::get_available_models();
+                                let provider_models: Vec<&ModelOption> = all_models.iter()
+                                    .filter(|m| m.name.starts_with("Provider:"))
+                                    .collect();
+                                let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                    provider_models.iter().copied().collect()
+                                } else {
+                                    let query_lower = app.search_query.to_lowercase();
+                                    provider_models.iter()
+                                        .filter(|m| {
+                                            m.name.to_lowercase().contains(&query_lower) ||
+                                            m.provider.to_lowercase().contains(&query_lower) ||
+                                            m.base_url.to_lowercase().contains(&query_lower)
+                                        })
+                                        .copied()
+                                        .collect()
+                                };
+                                if !filtered.is_empty() {
+                                    app.model_list_state.select(Some(0));
+                                }
+                            },
+                            _ => {}
+                        }
+                        false
+                    },
+                    AppState::CustomModel => {
+                        match key.code {
+                            crossterm::event::KeyCode::Esc => app.state = AppState::ModelSelector,
                             crossterm::event::KeyCode::Tab => app.custom_model_field = (app.custom_model_field + 1) % 2,
                             crossterm::event::KeyCode::Enter => {
                                 if !app.custom_model_name.is_empty() && !app.custom_base_url.is_empty() {
@@ -1502,6 +1742,7 @@ fn ui(f: &mut Frame, app: &mut App) {
                 AppState::Settings => render_settings(f, app, main_chunks[1]),
                 AppState::Help => render_help(f, app, main_chunks[1]),
                 AppState::CustomModel => render_custom_model(f, app, main_chunks[1]),
+                AppState::BaseUrlSelector => render_baseurl_selector(f, app, main_chunks[1]),
                 AppState::SessionSelector | AppState::Chat | AppState::Welcome => unreachable!(),
             }
         }
@@ -1511,12 +1752,12 @@ fn ui(f: &mut Frame, app: &mut App) {
     match app.state {
         AppState::Welcome => {
             // Center input area on welcome page (like OpenCode) - matches OpenCode welcome styling
-            let centered_input = centered_rect(70, 8, f.area()); // Slightly smaller input area
+            let centered_input = centered_rect(70, 12, f.area()); // Using 12% height for better OpenCode match
             render_input(f, app, centered_input);
         }
         _ => {
             // Full width input for chat and other states
-    render_input(f, app, layout[2]);
+            render_input(f, app, layout[2]);
         }
     }
     render_status_bar(f, app, layout[3]);
@@ -1566,7 +1807,7 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                 }
             }
             "edit" => {
-                    if let (Some(file_path), Some(old_string), Some(new_string)) = (
+                if let (Some(file_path), Some(old_string), Some(new_string)) = (
                         json.get("filePath").and_then(|v| v.as_str()).map(|s| s.to_string()),
                         json.get("oldString").and_then(|v| v.as_str()).map(|s| s.to_string()),
                         json.get("newString").and_then(|v| v.as_str()).map(|s| s.to_string()),
@@ -1627,10 +1868,10 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                         if max_lines > max_display_lines {
                             result.push(Line::from(Span::styled(
                                 format!("  ... {} more lines", max_lines - max_display_lines),
-                                    Style::default().fg(Color::DarkGray)
-                                )));
+                                Style::default().fg(Color::DarkGray)
+                            )));
+                        }
                     }
-                }
             }
             "file_manager" => {
                 if let Some(path) = json.get("path").and_then(|v| v.as_str()).map(|s| s.to_string()) {
@@ -1677,7 +1918,7 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                             }
                         }
                     } else if let Some(files) = json.get("files").and_then(|v| v.as_array()) {
-                    // files array (batch)
+                        // files array (batch)
                         result.push(Line::from(vec![
                             Span::styled("  Files:", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
                         ]));
@@ -1701,27 +1942,27 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                                 format!("    ... {} more", files.len() - 5),
                                 Style::default().fg(Color::DarkGray),
                             )));
-                }
+                        }
+                    }
             }
-        }
             "bash" => {
                 if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()).map(|s| s.to_string()) {
                         result.push(Line::from(vec![
-                        Span::styled("  Command: ", Style::default().fg(Color::Gray)),
-                        Span::styled(cmd, Style::default().fg(Color::White)),
-                    ]));
+                            Span::styled("  Command: ", Style::default().fg(Color::Gray)),
+                            Span::styled(cmd, Style::default().fg(Color::White)),
+                        ]));
+                    }
             }
-        }
             "grep" => {
                 if let Some(pattern) = json.get("pattern").and_then(|v| v.as_str()) {
                     result.push(Line::from(vec![
-                            Span::styled("  Pattern: ", Style::default().fg(Color::Gray)),
+                        Span::styled("  Pattern: ", Style::default().fg(Color::Gray)),
                         Span::styled(pattern.to_string(), Style::default().fg(Color::White)),
                     ]));
                 }
                 if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
                     result.push(Line::from(vec![
-                            Span::styled("  Path: ", Style::default().fg(Color::Gray)),
+                        Span::styled("  Path: ", Style::default().fg(Color::Gray)),
                         Span::styled(path.to_string(), Style::default().fg(Color::White)),
                     ]));
                 }
@@ -1756,23 +1997,23 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
 }
 
 fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status: &ToolStatus) -> ListItem<'static> {
-                let status_style = match status {
-                    ToolStatus::Running => Style::default().fg(Color::Yellow),
+    let status_style = match status {
+        ToolStatus::Running => Style::default().fg(Color::Yellow),
         ToolStatus::Success => Style::default().fg(Color::Rgb(100, 200, 100)), // Softer green
         ToolStatus::Error => Style::default().fg(Color::Rgb(200, 100, 100)), // Softer red
-                };
-                let icon = match status {
-                    ToolStatus::Running => "⏳",
-                    ToolStatus::Success => "✓",
-                    ToolStatus::Error => "✗",
-                };
-                
+    };
+    let icon = match status {
+        ToolStatus::Running => "⏳",
+        ToolStatus::Success => "✓",
+        ToolStatus::Error => "✗",
+    };
+    
     // Clean, minimal card design
     let card_bg = Color::Rgb(25, 25, 25); // Slightly lighter for better visibility
     
     // Minimal header - just icon and name, no extra spacing
-                let mut lines = vec![
-                    Line::from(vec![
+    let mut lines = vec![
+        Line::from(vec![
             Span::styled(format!("{} ", icon), status_style.add_modifier(Modifier::BOLD)),
             Span::styled(format!("{}", name), status_style.add_modifier(Modifier::BOLD)),
         ]),
@@ -1785,7 +2026,7 @@ fn render_tool_call_card(name: &str, args: &str, result: &Option<String>, status
     }
     
     // Add result if available - minimal, clean display
-                if let Some(res) = result {
+    if let Some(res) = result {
         if !res.trim().is_empty() {
             // For edit tool, just show success message briefly
             if name == "edit" && status == &ToolStatus::Success {
@@ -1980,8 +2221,8 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
     let input_paragraph = Paragraph::new(input_content);
     f.render_widget(input_paragraph, inner_area);
 
-    // Show command hints when "/" is typed (for new users)
-    if app.show_command_hints {
+    // Show command hints when typing "/"
+    if app.show_command_hints && app.chat_input.starts_with('/') {
         render_command_hints(f, app, area);
     }
 
@@ -2175,9 +2416,14 @@ fn render_command_hints(f: &mut Frame, app: &App, area: Rect) {
             if app.chat_input == "/" {
                 // Show all commands when just "/" is typed
                 true
+            } else if app.chat_input.len() > 1 {
+                // Filter by what they've typed (case-insensitive partial match)
+                let input_lower = app.chat_input.to_lowercase();
+                let cmd_lower = c.to_lowercase();
+                cmd_lower.starts_with(&input_lower) || cmd_lower.contains(&input_lower[1..]) // Skip the "/"
             } else {
-                // Otherwise filter by what they've typed
-                c.starts_with(&app.chat_input)
+                // Single character after "/" - show all
+                true
             }
         })
         .map(|(c, d)| {
@@ -2236,9 +2482,10 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+// Missing render functions need implementation or copying back
 fn render_model_selector(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    // Use full area with small margins for better usability
+    // Use full area with small margins
     let rect = Rect {
         x: area.x + 2,
         y: area.y + 1,
@@ -2306,13 +2553,25 @@ fn render_model_selector(f: &mut Frame, app: &mut App, area: Rect) {
             .collect()
     };
     
-    // Update selection if current selection is out of bounds
+    // Only update selection if it's out of bounds or not set - don't force it to current model
+    // This allows users to navigate and select different models
     if let Some(selected) = app.model_list_state.selected() {
         if selected >= filtered_models.len() {
+            // Selection is out of bounds, reset to first item
             app.model_list_state.select(Some(0.max(filtered_models.len().saturating_sub(1))));
         }
     } else if !filtered_models.is_empty() {
-        app.model_list_state.select(Some(0));
+        // No selection set, try to find current model or default to first
+        let current_selection = if let Some(ref selected_model) = app.selected_model {
+            filtered_models.iter().position(|m| m.name == selected_model.name && m.provider == selected_model.provider)
+        } else {
+            None
+        };
+        if let Some(idx) = current_selection {
+            app.model_list_state.select(Some(idx));
+        } else {
+            app.model_list_state.select(Some(0));
+        }
     }
     
     let items: Vec<ListItem> = filtered_models.iter()
@@ -2350,13 +2609,7 @@ fn render_model_selector(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_agent_selector(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    // Use full area with small margins
-    let rect = Rect {
-        x: area.x + 2,
-        y: area.y + 1,
-        width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(2),
-    };
+    let rect = centered_rect(60, 60, area);
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Select Agent");
     let items: Vec<ListItem> = App::get_available_agents().iter().map(|(n, d, _)| ListItem::new(format!("{} - {}", n, d))).collect();
@@ -2366,13 +2619,7 @@ fn render_agent_selector(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    // Use full area with small margins
-    let rect = Rect {
-        x: area.x + 2,
-        y: area.y + 1,
-        width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(2),
-    };
+    let rect = centered_rect(60, 70, area);
     f.render_widget(Clear, rect);
 
     let block = Block::default().borders(Borders::ALL).title("Settings");
@@ -2436,24 +2683,60 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
         .wrap(Wrap { trim: true });
     f.render_widget(url_para, layout[1]);
 
-    // Model list
+    // Model list - don't force selection, let user navigate freely
     let models = App::get_available_models();
+    
+    // Only ensure selection is valid (not out of bounds), but don't force it to current model
+    if let Some(selected) = app.model_list_state.selected() {
+        if selected >= models.len() {
+            // Selection out of bounds, reset to first item
+            app.model_list_state.select(Some(0));
+        }
+    } else if !models.is_empty() {
+        // No selection set, try to find current model or default to first
+        if let Some(ref selected_model) = app.selected_model {
+            if let Some(idx) = models.iter().position(|m| m.name == selected_model.name && m.provider == selected_model.provider) {
+                app.model_list_state.select(Some(idx));
+            } else {
+                app.model_list_state.select(Some(0));
+            }
+        } else {
+            app.model_list_state.select(Some(0));
+        }
+    }
+    
     let items: Vec<ListItem> = models
         .iter()
         .map(|m| {
+            let is_selected = app.selected_model.as_ref()
+                .map(|sm| sm.name == m.name && sm.provider == m.provider)
+                .unwrap_or(false);
+            
             let caption = if m.provider == "Custom" {
                 format!("{} (custom)", m.name)
+            } else if m.name.starts_with("Provider:") {
+                format!("{} → {}", m.name, m.base_url)
             } else {
                 format!("{} - {}", m.name, m.provider)
             };
-            ListItem::new(caption)
+            
+            let style = if is_selected {
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            
+            ListItem::new(Line::from(vec![
+                Span::styled(if is_selected { "✓ " } else { "  " }, style),
+                Span::styled(caption, style),
+            ]))
         })
         .collect();
 
-    let model_block = Block::default().borders(Borders::ALL).title("Models (↑/↓)");
+    let model_block = Block::default().borders(Borders::ALL).title("Models (↑/↓ to select)");
     let model_list = List::new(items)
         .block(model_block)
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        .highlight_style(Style::default().fg(Color::Yellow).bg(Color::Rgb(50, 50, 50)).add_modifier(Modifier::BOLD));
     f.render_stateful_widget(model_list, layout[2], &mut app.model_list_state);
 
     // Selection summary
@@ -2513,13 +2796,7 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_session_selector(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, area);
-    // Use full area with small margins
-    let rect = Rect {
-        x: area.x + 2,
-        y: area.y + 1,
-        width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(2),
-    };
+    let rect = centered_rect(60, 60, area);
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Sessions (hjkl/↑↓)");
     let items: Vec<ListItem> = app
@@ -2539,6 +2816,16 @@ fn render_session_selector(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_help(f: &mut Frame, _app: &App, area: Rect) {
     f.render_widget(Clear, area);
+    let rect = centered_rect(60, 60, area);
+    f.render_widget(Clear, rect);
+    let block = Block::default().borders(Borders::ALL).title("Help");
+    let text = "Available Commands:\n\n/models - Select Model\n/agents - Select Agent\n/settings - Configure API key / model / base URL\n/baseurl - Select provider base URL (Mistral, DeepSeek, OpenRouter, etc.)\n/help - Show this help screen\n/clear - Clear conversation and reset agent\n\nNavigation:\nUse Arrows to navigate lists.\nTab to switch between fields/agents.\nEnter to select.\nEsc to go back.\n\nTip: Type '/' in the input to see all available commands with autocomplete.";
+    let p = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
+    f.render_widget(p, rect);
+}
+
+fn render_baseurl_selector(f: &mut Frame, app: &mut App, area: Rect) {
+    f.render_widget(Clear, area);
     // Use full area with small margins
     let rect = Rect {
         x: area.x + 2,
@@ -2547,10 +2834,115 @@ fn render_help(f: &mut Frame, _app: &App, area: Rect) {
         height: area.height.saturating_sub(2),
     };
     f.render_widget(Clear, rect);
-    let block = Block::default().borders(Borders::ALL).title("Help");
-    let text = "Available Commands:\n\n/models - Select Model\n/agents - Select Agent\n/settings - Configure API key / model / base URL\n/help - Show this help screen\n/clear - Clear conversation and reset agent\n\nNavigation:\nUse Arrows to navigate lists.\nEnter to select.\nEsc to go back.\n\nTip: Type '/' in the input to see all available commands.";
-    let p = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
-    f.render_widget(p, rect);
+    
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Select Provider Base URL")
+        .title_style(Style::default().fg(Color::White));
+    
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // Search field
+            Constraint::Min(10),    // Provider list
+            Constraint::Length(2),  // Footer hints
+        ])
+        .split(inner);
+    
+    // Search field
+    let search_block = Block::default()
+        .borders(Borders::ALL)
+        .title(if app.model_search_focused { "Search (active)" } else { "Search" })
+        .title_style(if app.model_search_focused {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Gray)
+        });
+    
+    let search_text = if app.search_query.is_empty() {
+        "Type to search providers...".to_string()
+    } else {
+        app.search_query.clone()
+    };
+    
+    let search_style = if app.search_query.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    
+    let search_para = Paragraph::new(search_text)
+        .block(search_block)
+        .style(search_style);
+    f.render_widget(search_para, layout[0]);
+    
+    // Filter to only provider entries
+    let all_models = App::get_available_models();
+    let provider_models: Vec<&ModelOption> = all_models.iter()
+        .filter(|m| m.name.starts_with("Provider:"))
+        .collect();
+    
+    let filtered_providers: Vec<&ModelOption> = if app.search_query.is_empty() {
+        provider_models
+    } else {
+        let query_lower = app.search_query.to_lowercase();
+        provider_models.into_iter()
+            .filter(|m| {
+                m.name.to_lowercase().contains(&query_lower) ||
+                m.provider.to_lowercase().contains(&query_lower) ||
+                m.base_url.to_lowercase().contains(&query_lower)
+            })
+            .collect()
+    };
+    
+    // Only update selection if it's out of bounds or not set
+    if let Some(selected) = app.model_list_state.selected() {
+        if selected >= filtered_providers.len() {
+            app.model_list_state.select(Some(0.max(filtered_providers.len().saturating_sub(1))));
+        }
+    } else if !filtered_providers.is_empty() {
+        // Try to find current base URL or default to first
+        if let Some(ref selected_model) = app.selected_model {
+            if let Some(idx) = filtered_providers.iter().position(|m| m.base_url == selected_model.base_url) {
+                app.model_list_state.select(Some(idx));
+            } else {
+                app.model_list_state.select(Some(0));
+            }
+        } else {
+            app.model_list_state.select(Some(0));
+        }
+    }
+    
+    let items: Vec<ListItem> = filtered_providers.iter()
+        .map(|m| {
+            let display_name = format!("{} → {}", m.name, m.base_url);
+            ListItem::new(display_name)
+        })
+        .collect();
+    
+    let provider_block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!("Providers ({} found)", filtered_providers.len()));
+    
+    let list = List::new(items)
+        .block(provider_block)
+        .highlight_style(Style::default().fg(Color::Yellow).bg(Color::Rgb(50, 50, 50)));
+    
+    f.render_stateful_widget(list, layout[1], &mut app.model_list_state);
+    
+    // Footer hints
+    let hints = if app.model_search_focused {
+        "Type to search | Tab: switch to list | Esc: back"
+    } else {
+        "Tab: focus search | ↑/↓: navigate | Enter: select | Esc: back"
+    };
+    let hints_para = Paragraph::new(hints)
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(hints_para, layout[2]);
 }
 
 fn render_custom_model(f: &mut Frame, app: &mut App, area: Rect) {
