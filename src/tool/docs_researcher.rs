@@ -1,4 +1,8 @@
 pub mod docs_researcher {
+    //! Lightweight research notebook that stores findings as Markdown under
+    //! `pengy_docs/`. Supports creating documents, reading them back, and
+    //! searching with contextual snippets to reuse prior work.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
@@ -6,12 +10,14 @@ pub mod docs_researcher {
     use std::fs;
     use std::path::PathBuf;
 
+    /// Persists research notes to disk and retrieves contextual excerpts.
     pub struct DocsResearcherTool {
         tool: Tool,
         docs_dir: PathBuf,
     }
 
     impl DocsResearcherTool {
+        /// Define the tool schema and initialize the backing docs directory.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -74,6 +80,7 @@ pub mod docs_researcher {
             Self { tool, docs_dir }
         }
 
+        /// Create the `pengy_docs` directory if it doesn't already exist.
         fn ensure_docs_dir(&self) -> Result<(), Box<dyn Error>> {
             if !self.docs_dir.exists() {
                 fs::create_dir_all(&self.docs_dir)?;
@@ -81,10 +88,12 @@ pub mod docs_researcher {
             Ok(())
         }
 
+        /// Build a path within the docs directory for the given filename.
         fn get_file_path(&self, file_name: &str) -> PathBuf {
             self.docs_dir.join(file_name)
         }
 
+        /// Write a new Markdown document into `pengy_docs/`.
         fn create_document(
             &self,
             file_name: &str,
@@ -105,6 +114,8 @@ pub mod docs_researcher {
             ))
         }
 
+        /// Read an existing document from `pengy_docs/`, returning an error if
+        /// it is missing.
         fn read_document(&self, file: &str) -> Result<String, Box<dyn Error>> {
             let file_path = self.get_file_path(file);
 
@@ -117,6 +128,8 @@ pub mod docs_researcher {
             Ok(content)
         }
 
+        /// Search a document for case-insensitive matches and return surrounding
+        /// context with line numbers.
         fn search_document(
             &self,
             file: &str,
@@ -179,6 +192,7 @@ pub mod docs_researcher {
             self.tool.get_json()
         }
 
+        /// Parse arguments and dispatch to create, read, or search operations.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;

@@ -1,4 +1,8 @@
 pub mod docs_reader {
+    //! Read PDF documents and return text snippets with optional line/word
+    //! limits. Uses multiple backends (pandoc, pdf_extract, pdftotext) to
+    //! maximize extraction success and adds truncation metadata for the caller.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
@@ -6,11 +10,15 @@ pub mod docs_reader {
     use std::path::PathBuf;
     use std::process::Command;
 
+    /// Extracts text from PDFs and returns limited snippets for downstream
+    /// processing.
     pub struct DocsReaderTool {
         tool: Tool,
     }
 
     impl DocsReaderTool {
+        /// Create the tool definition describing accepted parameters and
+        /// defaults.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -56,6 +64,8 @@ pub mod docs_reader {
             Self { tool }
         }
 
+        /// Try several extraction strategies to convert a PDF into text,
+        /// preferring pandoc, then `pdf_extract`, and finally `pdftotext`.
         fn convert_pdf_to_text(&self, file_path: &PathBuf) -> Result<String, Box<dyn Error>> {
             // First, try to use pandoc if available (converts PDF to markdown, then we can use as text)
             if let Ok(output) = Command::new("pandoc")
@@ -100,6 +110,8 @@ pub mod docs_reader {
             Err("Failed to extract text from PDF: All conversion methods failed or returned empty content.".into())
         }
 
+        /// Apply either word-count or line-count truncation to the extracted
+        /// text.
         fn limit_text(&self, text: &str, limit_type: &str, limit: usize) -> String {
             match limit_type {
                 "words" => {
@@ -115,6 +127,8 @@ pub mod docs_reader {
             }
         }
 
+        /// Load a PDF from disk, convert it to text, and return a truncated
+        /// result with metadata describing any truncation applied.
         fn read_pdf(
             &self,
             file_name: &str,
@@ -188,6 +202,7 @@ pub mod docs_reader {
             self.tool.get_json()
         }
 
+        /// Parse arguments and run the PDF reader with optional limits.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;

@@ -1,4 +1,8 @@
 pub mod edit {
+    //! Perform targeted string replacements within files using a series of
+    //! fallback matching strategies to handle whitespace, casing, and line
+    //! ending differences.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
@@ -6,11 +10,14 @@ pub mod edit {
     use std::fs;
     use std::path::Path;
 
+    /// Performs resilient in-file replacements using multiple match strategies
+    /// to reduce the chance of missing a target string.
     pub struct EditTool {
         tool: Tool,
     }
 
     impl EditTool {
+        /// Construct the edit tool definition and its configurable parameters.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -122,6 +129,9 @@ pub mod edit {
             None
         }
 
+        /// Try a sequence of increasingly flexible matching strategies to locate
+        /// `old_string` within `content`, returning the byte range of the first
+        /// successful match.
         fn find_match_with_fallbacks(content: &str, old_string: &str) -> Option<(usize, usize)> {
             // Strategy 1: Exact match
             if let Some(pos) = content.find(old_string) {
@@ -386,6 +396,8 @@ pub mod edit {
             text.len()
         }
 
+        /// Apply either single or global replacements using the fallback matcher
+        /// and persist the modified file contents.
         fn execute_edit(
             &self,
             file_path: &str,
@@ -461,6 +473,7 @@ pub mod edit {
             self.tool.get_json()
         }
 
+        /// Parse incoming parameters and perform the requested edit operation.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;

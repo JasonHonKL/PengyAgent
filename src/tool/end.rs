@@ -1,4 +1,7 @@
 pub mod end {
+    //! Tool that signals the agent loop to finish early and return control to
+    //! the caller with an optional user-facing reason.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
@@ -11,6 +14,8 @@ pub mod end {
     }
 
     impl EndTool {
+        /// Create the sentinel `end` tool definition with an optional reason
+        /// parameter.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -43,6 +48,7 @@ pub mod end {
             self.tool.get_json()
         }
 
+        /// Parse the optional reason and return the end-of-conversation marker.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON (may be empty or contain an optional reason)
             let args: serde_json::Value = serde_json::from_str(arguments)?;
@@ -68,3 +74,4 @@ pub mod end {
         }
     }
 }
+

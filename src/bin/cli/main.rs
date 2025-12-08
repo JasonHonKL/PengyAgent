@@ -8,11 +8,17 @@ use app::{App, AppState, ModelOption};
 use command::{parse_agent_type, parse_cmd_args, run_cmd_mode};
 use constants::DEFAULT_BASE_URL;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseEventKind,
+    },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, Clear,
+        ClearType,
+    },
 };
-use handlers::{handle_chat_key, handle_welcome_key};
+use handlers::{handle_chat_key, handle_welcome_key, scroll_chat};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{error::Error, io::stdout, time::Duration};
 use ui::ui;
@@ -61,7 +67,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rt = tokio::runtime::Runtime::new()?;
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        Clear(ClearType::All)
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -73,16 +84,41 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if event::poll(Duration::from_millis(16))? {
             let evt = event::read()?;
-            if let event::Event::Key(key) = evt {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
+            match evt {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
 
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                    break;
-                }
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c')
+                    {
+                        if app.loading {
+                            app.loading = false;
+                            app.error = Some("Stopped by user (Ctrl+C)".to_string());
+                            continue;
+                        }
+                        if !app.chat_input.is_empty() {
+                            app.chat_input.clear();
+                            app.input_cursor = 0;
+                            app.show_command_hints = false;
+                            continue;
+                        }
+                        break;
+                    }
 
-                let should_quit = match app.state {
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('p')
+                    {
+                        app.state = AppState::Chat;
+                        app.chat_input = "/".to_string();
+                        app.input_cursor = app.chat_input.len();
+                        app.show_command_hints = true;
+                        app.user_scrolled = false;
+                        continue;
+                    }
+
+                    let should_quit = match app.state {
                     AppState::Welcome => matches!(
                         handle_welcome_key(&mut app, key.code, &rt),
                         Err(e) if e.to_string() == "quit"
@@ -99,7 +135,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             KeyCode::Enter => {
                                 if let Some(idx) = app.session_list_state.selected() {
                                     if idx < app.sessions.len() {
-                                        app.current_session = idx;
+                                        app.load_session(idx);
                                         app.state =
                                             app.previous_state.clone().unwrap_or(AppState::Welcome);
                                     }
@@ -737,6 +773,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if should_quit {
                     break;
                 }
+                }
+                Event::Mouse(mouse_event) => match mouse_event.kind {
+                    MouseEventKind::ScrollUp if app.state == AppState::Chat && !app.chat_messages.is_empty() => {
+                        scroll_chat(&mut app, -2)
+                    }
+                    MouseEventKind::ScrollDown if app.state == AppState::Chat && !app.chat_messages.is_empty() => {
+                        scroll_chat(&mut app, 2)
+                    }
+                    _ => {}
+                },
+                _ => {}
             }
         }
     }

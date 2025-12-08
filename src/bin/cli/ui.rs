@@ -1,4 +1,4 @@
-use crate::app::{App, AppState, ChatMessage, ModelOption, ToolStatus};
+use crate::app::{AgentType, App, AppState, ChatMessage, ModelOption, ToolStatus};
 use crate::constants::{DEFAULT_BASE_URL, VERSION};
 use ratatui::{
     Frame,
@@ -9,6 +9,7 @@ use ratatui::{
         Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, Wrap,
     },
 };
+use std::collections::HashSet;
 
 fn wrap_to_width(text: &str, max: usize) -> Vec<String> {
     if text.len() <= max {
@@ -29,14 +30,136 @@ fn wrap_to_width(text: &str, max: usize) -> Vec<String> {
     lines
 }
 
+fn agent_accent(agent: AgentType) -> Color {
+    match agent {
+        AgentType::Coder => Color::Rgb(92, 136, 255),
+        AgentType::CodeResearcher => Color::Rgb(80, 190, 200),
+        AgentType::TestAgent => Color::Rgb(120, 200, 120),
+        AgentType::PengyAgent => Color::Rgb(200, 120, 220),
+        AgentType::ControlAgent => Color::Rgb(230, 200, 120),
+        AgentType::IssueAgent => Color::Rgb(240, 120, 120),
+    }
+}
+
+fn keyword_set(lang: &str) -> HashSet<&'static str> {
+    let mut set = HashSet::new();
+    let keywords = match lang.to_lowercase().as_str() {
+        "rust" => vec![
+            "fn", "let", "mut", "pub", "struct", "impl", "trait", "enum", "match", "use", "mod",
+            "ref", "if", "else", "loop", "for", "while", "in", "move", "return", "async", "await",
+        ],
+        "python" => vec![
+            "def", "class", "import", "from", "return", "if", "elif", "else", "for", "while", "in",
+            "with", "as", "lambda", "yield", "async", "await",
+        ],
+        "typescript" | "javascript" | "ts" | "js" => vec![
+            "function", "const", "let", "var", "import", "from", "export", "return", "if", "else",
+            "for", "while", "async", "await", "class", "extends",
+        ],
+        "ocaml" | "ml" => vec![
+            "let", "in", "rec", "type", "module", "match", "with", "open", "fun", "if", "then",
+            "else",
+        ],
+        _ => vec![
+            "let", "fn", "function", "const", "return", "if", "else", "for", "while", "match",
+            "class", "struct", "impl", "module", "type",
+        ],
+    };
+    for kw in keywords {
+        set.insert(kw);
+    }
+    set
+}
+
+fn style_token(token: &str, lang: &str, accent: Color, bg: Color) -> Span<'static> {
+    let clean = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+    let keywords = keyword_set(lang);
+    let base_style = Style::default().bg(bg).fg(Color::White);
+
+    if token.trim_start().starts_with("//") || token.trim_start().starts_with("#") {
+        Span::styled(token.to_string(), base_style.fg(Color::Gray))
+    } else if token.starts_with('"') || token.starts_with('\'') {
+        Span::styled(token.to_string(), base_style.fg(Color::LightGreen))
+    } else if keywords.contains(clean) {
+        Span::styled(
+            token.to_string(),
+            base_style.fg(accent).add_modifier(Modifier::BOLD),
+        )
+    } else if token.chars().all(|c| c.is_ascii_digit()) {
+        Span::styled(token.to_string(), base_style.fg(Color::Cyan))
+    } else {
+        Span::styled(token.to_string(), base_style.fg(Color::White))
+    }
+}
+
+fn highlight_code_line(line: &str, lang: &str, accent: Color) -> Line<'static> {
+    let bg = Color::Rgb(25, 25, 25);
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::styled("  ", Style::default().bg(bg)));
+
+    let mut current = String::new();
+    for ch in line.chars() {
+        if ch.is_whitespace() {
+            if !current.is_empty() {
+                spans.push(style_token(&current, lang, accent, bg));
+                current.clear();
+            }
+            spans.push(Span::styled(ch.to_string(), Style::default().bg(bg).fg(Color::Gray)));
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        spans.push(style_token(&current, lang, accent, bg));
+    }
+
+    Line::from(spans)
+}
+
+fn render_markdown_with_code(content: &str, accent: Color) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::raw("")));
+
+    let mut in_code_block = false;
+    let mut lang = String::new();
+
+    for line in content.lines() {
+        if line.trim_start().starts_with("```") {
+            if in_code_block {
+                lines.push(Line::from(Span::styled(
+                    "  ",
+                    Style::default()
+                        .bg(Color::Rgb(25, 25, 25))
+                        .fg(Color::Gray),
+                )));
+            }
+            in_code_block = !in_code_block;
+            lang = line.trim_start().trim_matches('`').to_string();
+            continue;
+        }
+
+        if in_code_block {
+            lines.push(highlight_code_line(line, &lang, accent));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(accent)),
+                Span::styled(line.to_string(), Style::default().fg(Color::White)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(Span::raw("")));
+    lines
+}
+
 pub(crate) fn ui(f: &mut Frame, app: &mut App) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
+            Constraint::Length(2),
             Constraint::Min(0),
             Constraint::Length(3),
-            Constraint::Length(1),
+            Constraint::Length(2),
         ])
         .split(f.area());
 
@@ -118,6 +241,51 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
     if let Some(json) = &parsed {
         let mut result = Vec::new();
         match name {
+            "file_manager" => {
+                let op = json
+                    .get("operation")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let path = json
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let content = json
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                result.push(Line::from(vec![
+                    Span::styled("  Op: ", Style::default().fg(Color::Gray)),
+                    Span::styled(op.to_string(), Style::default().fg(Color::White)),
+                ]));
+                if !path.is_empty() {
+                    result.push(Line::from(vec![
+                        Span::styled("  Path: ", Style::default().fg(Color::Gray)),
+                        Span::styled(path.to_string(), Style::default().fg(Color::White)),
+                    ]));
+                }
+                if !content.is_empty() {
+                    result.push(Line::from(vec![
+                        Span::styled("  Content:", Style::default().fg(Color::Gray)),
+                    ]));
+                    for line in content.lines().take(8) {
+                        let preview = if line.len() > 160 {
+                            format!("{}…", &line[..159])
+                        } else {
+                            line.to_string()
+                        };
+                        result.push(Line::from(vec![
+                            Span::styled(
+                                format!("    {}", preview),
+                                Style::default()
+                                    .fg(Color::White)
+                                    .bg(Color::Rgb(20, 20, 20)),
+                            ),
+                        ]));
+                    }
+                }
+            }
             "todo" => {
                 if let Some(action_str) = json.get("action").and_then(|v| v.as_str()) {
                     let action = action_str.to_string();
@@ -349,17 +517,18 @@ fn render_tool_call_card(
 ) -> ListItem<'static> {
     let mut lines = Vec::new();
 
-    let status_icon = match status {
-        ToolStatus::Running => "⏳",
-        ToolStatus::Success => "✅",
-        ToolStatus::Error => "❌",
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(status_icon, Style::default().fg(Color::Yellow)),
-        Span::styled(" Tool: ", Style::default().fg(Color::Gray)),
-        Span::styled(name.to_string(), Style::default().fg(Color::White)),
-    ]));
+    if let ToolStatus::Error = status {
+        lines.push(Line::from(vec![
+            Span::styled("[ERR]", Style::default().fg(Color::Red)),
+            Span::styled(" Tool: ", Style::default().fg(Color::Gray)),
+            Span::styled(name.to_string(), Style::default().fg(Color::White)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("Tool: ", Style::default().fg(Color::Gray)),
+            Span::styled(name.to_string(), Style::default().fg(Color::White)),
+        ]));
+    }
 
     if !args.is_empty() {
         let arg_lines = format_tool_args_display(name, args);
@@ -409,6 +578,7 @@ fn render_tool_call_card(
 }
 
 fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
+    let accent = agent_accent(app.selected_agent);
     let messages: Vec<ListItem> = app
         .chat_messages
         .iter()
@@ -427,22 +597,9 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                 ListItem::new(user_lines)
             }
             ChatMessage::Assistant(content) => {
-                let mut assistant_lines = vec![
-                    Line::from(vec![Span::raw("")]),
-                    Line::from(vec![Span::raw("")]),
-                ];
-                let content_lines: Vec<Line> = content
-                    .lines()
-                    .map(|l| {
-                        Line::from(vec![
-                            Span::styled("  ", Style::default()),
-                            Span::raw(l.to_string()),
-                        ])
-                    })
-                    .collect();
-                assistant_lines.extend(content_lines);
-                assistant_lines.push(Line::from(vec![Span::raw("")]));
-                assistant_lines.push(Line::from(vec![Span::raw("")]));
+                let mut assistant_lines = render_markdown_with_code(content, accent);
+                assistant_lines.insert(0, Line::from(Span::raw("")));
+                assistant_lines.push(Line::from(Span::raw("")));
                 ListItem::new(assistant_lines)
             }
             ChatMessage::ToolCall {
@@ -453,7 +610,6 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                 ..
             } => render_tool_call_card(name, args, result, status),
             ChatMessage::Thinking(content) => ListItem::new(Line::from(vec![
-                Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
                 Span::styled(
                     content.clone(),
                     Style::default()
@@ -505,10 +661,15 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
 fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let state = format!("{:?}", app.state);
     let title = format!(" Pengy Agent {} │ State: {} ", VERSION, state);
-    let header = Paragraph::new(title).style(
+    let accent = agent_accent(app.selected_agent);
+    let header = Paragraph::new(vec![
+        Line::from(title),
+        Line::from(""),
+    ])
+    .style(
         Style::default()
             .fg(Color::White)
-            .bg(Color::Black)
+            .bg(accent)
             .add_modifier(Modifier::BOLD),
     );
     f.render_widget(header, area);
@@ -516,6 +677,8 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
     let input_bg_color = Color::Rgb(30, 30, 30);
+    let accent = agent_accent(app.selected_agent);
+    let gutter_width: u16 = 2; // "│ "
 
     let bg_block = Block::default().style(Style::default().bg(input_bg_color));
     f.render_widget(bg_block, area);
@@ -529,7 +692,9 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
 
     let prompt = "> ";
 
-    let available_width = inner_area.width.saturating_sub(prompt.len() as u16);
+    let available_width = inner_area
+        .width
+        .saturating_sub(gutter_width + prompt.len() as u16);
 
     let input_text = &app.chat_input;
     let mut wrapped_lines = Vec::new();
@@ -561,10 +726,18 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
         let prefix = if i == 0 { prompt } else { "  " };
         input_content.push(Line::from(vec![
             Span::styled(
+                "│ ",
+                Style::default()
+                    .fg(accent)
+                    .bg(input_bg_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
                 prefix.to_string(),
                 Style::default()
-                    .fg(Color::Rgb(180, 180, 180))
-                    .bg(input_bg_color),
+                    .fg(accent)
+                    .bg(input_bg_color)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 line.clone(),
@@ -599,7 +772,7 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let prefix_len = if cursor_line == 0 { prompt.len() } else { 2 };
-    let cursor_x = (inner_area.x + prefix_len as u16 + cursor_col as u16)
+    let cursor_x = (inner_area.x + gutter_width + prefix_len as u16 + cursor_col as u16)
         .min(inner_area.x + inner_area.width.saturating_sub(1));
     let cursor_y = inner_area.y + top_padding as u16 + cursor_line as u16;
     f.set_cursor_position((cursor_x, cursor_y));
@@ -617,19 +790,29 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         "● Idle"
     };
+    let accent = agent_accent(app.selected_agent);
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .to_string_lossy()
         .to_string();
-    let status_text = format!(
-        " {} │ Model: {} │ Agent: {} │ {} ",
-        cwd, model_name, agent_name, loading
-    );
-    let status = Paragraph::new(status_text).style(
-        Style::default()
-            .fg(Color::Rgb(150, 150, 150))
-            .bg(Color::Black),
-    );
+    let status_line = Line::from(vec![
+        Span::styled(
+            format!(" {} │ Model: {} │ ", cwd, model_name),
+            Style::default().fg(Color::Rgb(170, 170, 170)),
+        ),
+        Span::styled(
+            format!("Agent: {}", agent_name),
+            Style::default()
+                .fg(accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" │ {}", loading),
+            Style::default().fg(Color::Rgb(170, 170, 170)),
+        ),
+    ]);
+    let status = Paragraph::new(vec![status_line, Line::from("")])
+        .style(Style::default().bg(Color::Rgb(10, 10, 10)));
     f.render_widget(status, area);
 }
 
@@ -749,9 +932,7 @@ fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Clear, area);
 
     let panel = centered_rect(80, 70, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("Welcome to Pengy Agent");
+    let block = Block::default().borders(Borders::NONE);
     let content_area = block.inner(panel);
     f.render_widget(block, panel);
 

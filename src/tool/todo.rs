@@ -1,4 +1,7 @@
 pub mod todo {
+    //! Maintain a lightweight todo list persisted to `.pengy_todo.json`, with
+    //! support for reading, ticking, inserting, deleting, and batch updates.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
@@ -9,12 +12,15 @@ pub mod todo {
 
     const TODO_FILE: &str = ".pengy_todo.json";
 
+    /// Stored representation of a single todo task.
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
     struct TodoTask {
         description: String,
         completed: bool,
     }
 
+    /// Manages the todo list in memory and persists it to disk for reuse across
+    /// sessions.
     pub struct TodoTool {
         tool: Tool,
         state: Arc<Mutex<Vec<TodoTask>>>,
@@ -22,6 +28,7 @@ pub mod todo {
     }
 
     impl TodoTool {
+        /// Build the todo tool definition and load existing state from disk.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -111,6 +118,8 @@ pub mod todo {
             }
         }
 
+        /// Read the persisted todo list from disk, returning an empty list if
+        /// the file is missing or unreadable.
         fn load_state(path: &Path) -> Result<Vec<TodoTask>, Box<dyn Error>> {
             if path.exists() {
                 let content = fs::read_to_string(path)?;
@@ -124,12 +133,15 @@ pub mod todo {
             }
         }
 
+        /// Persist the current task list to disk in a human-readable format.
         fn save_state(&self, tasks: &[TodoTask]) -> Result<(), Box<dyn Error>> {
             let json = serde_json::to_string_pretty(tasks)?;
             fs::write(&self.file_path, json)?;
             Ok(())
         }
 
+        /// Return a formatted view of all tasks, refreshing from disk before
+        /// reading to pick up external changes.
         fn read_tasks(&self) -> Result<String, Box<dyn Error>> {
             // Refresh from disk in case another session updated it
             {
@@ -165,6 +177,8 @@ pub mod todo {
             Ok(result.trim().to_string())
         }
 
+        /// Apply a single tick/insert/delete operation to the provided task
+        /// list, validating required arguments.
         fn apply_operation(
             tasks: &mut Vec<TodoTask>,
             args: &serde_json::Value,
@@ -350,6 +364,8 @@ pub mod todo {
             self.tool.get_json()
         }
 
+        /// Parse arguments and dispatch to read or modify actions, supporting
+        /// batch updates via the `operations` array.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;

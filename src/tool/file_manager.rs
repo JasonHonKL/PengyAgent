@@ -1,4 +1,7 @@
 pub mod file_manager {
+    //! Create files or directories within the current workspace while enforcing
+    //! path safety and optional partial replacements.
+
     use serde_json;
     use std::collections::HashMap;
     use std::error::Error;
@@ -15,6 +18,8 @@ pub mod file_manager {
     }
 
     impl FileManagerTool {
+        /// Define the file manager tool and capture the current workspace root
+        /// for path validation.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -145,6 +150,8 @@ pub mod file_manager {
             normalized
         }
 
+        /// Normalize and validate a provided path, ensuring it stays within the
+        /// workspace root.
         fn resolve_path(&self, raw_path: &str) -> Result<PathBuf, Box<dyn Error>> {
             // Try to canonicalize workspace_root, but fall back to absolute path if it doesn't exist
             let workspace_root = self.workspace_root.canonicalize().unwrap_or_else(|_| {
@@ -213,6 +220,8 @@ pub mod file_manager {
             Ok(format!("Directory created at {}", path.display()))
         }
 
+        /// Write content to a file, optionally replacing only a specific line
+        /// range and creating parent directories when requested.
         fn write_file(
             &self,
             path: &Path,
@@ -401,6 +410,7 @@ pub mod file_manager {
             self.tool.get_json()
         }
 
+        /// Parse incoming arguments and execute single or batch file operations.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             let args: serde_json::Value = serde_json::from_str(arguments)?;
 

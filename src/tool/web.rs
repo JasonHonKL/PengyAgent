@@ -1,15 +1,21 @@
 pub mod web {
+    //! Fetch remote web content with optional timeout handling and basic HTML
+    //! text extraction for easier downstream processing.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
     use std::error::Error;
 
+    /// Performs HTTP GET requests and normalizes HTML responses into readable
+    /// text.
     pub struct WebTool {
         tool: Tool,
         client: reqwest::Client,
     }
 
     impl WebTool {
+        /// Create the web tool with default parameters and an HTTP client.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -54,6 +60,8 @@ pub mod web {
             Self { tool, client }
         }
 
+        /// Fetch content from the given URL, applying an optional timeout and
+        /// returning cleaned text for HTML responses.
         async fn fetch_url(
             &self,
             url: &str,
@@ -109,6 +117,8 @@ pub mod web {
             }
         }
 
+        /// Minimal HTML-to-text extractor that drops script/style tags and
+        /// decodes common entities.
         fn extract_text_from_html(html: &str) -> String {
             // Basic HTML text extraction - remove script and style tags, decode entities
             let mut result = String::new();
@@ -195,6 +205,7 @@ pub mod web {
             self.tool.get_json()
         }
 
+        /// Parse arguments, spin up a runtime, and execute the HTTP request.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;

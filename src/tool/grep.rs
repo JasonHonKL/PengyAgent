@@ -1,15 +1,20 @@
 pub mod grep {
+    //! Search file contents via ripgrep with a grep fallback, returning matched
+    //! lines with file paths and numbers for quick navigation.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
     use std::error::Error;
     use std::process::Command;
 
+    /// Executes regex searches across files using ripgrep when available.
     pub struct GrepTool {
         tool: Tool,
     }
 
     impl GrepTool {
+        /// Build the tool schema for regex search parameters.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -54,6 +59,8 @@ pub mod grep {
             Self { tool }
         }
 
+        /// Run ripgrep (or fall back to grep) with optional path and include
+        /// filters, returning a normalized textual result.
         fn execute_grep(
             &self,
             pattern: &str,
@@ -137,6 +144,8 @@ pub mod grep {
             }
         }
 
+        /// Execute the legacy `grep` command when ripgrep is unavailable or
+        /// fails unexpectedly.
         fn fallback_to_grep(
             &self,
             pattern: &str,
@@ -222,6 +231,8 @@ pub mod grep {
             self.tool.get_json()
         }
 
+        /// Parse arguments and perform the search, defaulting to the current
+        /// directory when no path is provided.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;

@@ -1,15 +1,21 @@
 pub mod github_tool {
+    //! Wrapper around `gh` CLI operations for viewing and creating issues or
+    //! pull requests, with a unified tool schema for agent consumption.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use crate::util::github_control::github_control;
     use serde_json;
     use std::collections::HashMap;
     use std::error::Error;
 
+    /// Exposes a subset of GitHub actions (list/view/create) via the tool
+    /// interface.
     pub struct GithubTool {
         tool: Tool,
     }
 
     impl GithubTool {
+        /// Define the GitHub tool parameters and supported actions.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -153,6 +159,8 @@ pub mod github_tool {
             self.tool.get_json()
         }
 
+        /// Route parsed arguments to the requested GitHub action and return the
+        /// CLI output or error.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;

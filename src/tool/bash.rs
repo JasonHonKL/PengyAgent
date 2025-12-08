@@ -1,4 +1,8 @@
 pub mod bash {
+    //! Execute bash commands in a persistent shell session.
+    //! Tracks working directory and environment variables between calls so
+    //! agents can run incremental commands without losing context.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
@@ -7,6 +11,8 @@ pub mod bash {
     use std::process::Command;
     use std::sync::{Arc, Mutex};
 
+    /// Executes bash commands while persisting working directory and env vars
+    /// across invocations.
     pub struct BashTool {
         tool: Tool,
         state: Arc<Mutex<BashState>>,
@@ -18,6 +24,7 @@ pub mod bash {
     }
 
     impl BashTool {
+        /// Build a new `bash` tool definition and initialize the session state.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -64,6 +71,7 @@ pub mod bash {
             }
         }
 
+        /// Clear any remembered working directory and environment variables.
         fn restart_session(&self) -> Result<(), Box<dyn Error>> {
             let mut state_guard = self.state.lock().unwrap();
             state_guard.working_dir = None;
@@ -71,6 +79,9 @@ pub mod bash {
             Ok(())
         }
 
+        /// Execute a bash command while preserving the tracked session state.
+        /// Updates the stored working directory after execution and returns
+        /// combined stdout/stderr output.
         fn execute_command(&self, cmd: &str) -> Result<String, Box<dyn Error>> {
             let state_guard = self.state.lock().unwrap();
 
@@ -141,6 +152,8 @@ pub mod bash {
             self.tool.get_json()
         }
 
+        /// Parse arguments and run the bash command with optional restart and
+        /// configurable waiting behavior.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;

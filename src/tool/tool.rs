@@ -1,16 +1,23 @@
 pub mod tool {
+    //! Core tool abstractions and schema serialization helpers shared by all
+    //! tool implementations.
 
     use serde::Serialize;
     use serde_json;
     use std::collections::HashMap;
     use std::error::Error;
 
+    /// Unified interface that all tool implementations must satisfy.
     pub trait ToolCall: Send + Sync {
+        /// Return the tool's JSON schema used when registering available tools.
         fn get_json(&self) -> Result<serde_json::Value, serde_json::Error>;
+        /// Execute the tool with the provided serialized arguments.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>>;
+        /// Human-readable tool name.
         fn name(&self) -> &str;
     }
 
+    /// Definition of a tool, including its description, parameters, and required fields.
     #[derive(Debug, Clone, Serialize)]
     pub struct Tool {
         pub name: String,
@@ -20,6 +27,7 @@ pub mod tool {
         pub required: Vec<String>,
     }
 
+    /// Metadata describing a single parameter within a tool schema.
     #[derive(Debug, Clone, Serialize)]
     pub struct Parameter {
         pub items: HashMap<String, String>,
@@ -130,6 +138,8 @@ pub mod tool {
             Ok(serde_json::Value::Object(tool_obj))
         }
 
+        /// Mock runner primarily used for testing and validation; real tools
+        /// implement their own behavior.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
@@ -156,6 +166,7 @@ pub mod tool {
     }
 
     impl Tool {
+        /// Convenience wrapper around `get_json` for callers expecting `to_json`.
         pub fn to_json(&self) -> Result<serde_json::Value, serde_json::Error> {
             self.get_json()
         }

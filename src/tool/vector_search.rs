@@ -1,4 +1,7 @@
 pub mod vector_search {
+    //! Perform semantic vector search across provided text files by chunking,
+    //! embedding, and scoring content against a query.
+
     use crate::model::model::model::Model;
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
@@ -7,6 +10,8 @@ pub mod vector_search {
     use std::fs;
     use std::path::Path;
 
+    /// Handles file chunking, embeddings, and similarity scoring for semantic
+    /// search use cases.
     pub struct VectorSearchTool {
         tool: Tool,
         api_key: String,
@@ -15,6 +20,8 @@ pub mod vector_search {
     }
 
     impl VectorSearchTool {
+        /// Create a new vector search tool with the provided model credentials
+        /// and configuration.
         pub fn new(api_key: String, model_name: String, base_url: String) -> Self {
             let mut parameters = HashMap::new();
 
@@ -74,6 +81,8 @@ pub mod vector_search {
             }
         }
 
+        /// Validate that the path points to a readable text file (not PDF) and
+        /// return its contents.
         fn read_text_file(&self, file_path: &str) -> Result<String, Box<dyn Error>> {
             let path = Path::new(file_path);
 
@@ -98,6 +107,8 @@ pub mod vector_search {
             Ok(content)
         }
 
+        /// Split text into word-based chunks of at most `chunk_size_words`,
+        /// returning both the chunk text and its starting index.
         fn chunk_text(&self, text: &str, chunk_size_words: usize) -> Vec<(String, usize)> {
             let words: Vec<&str> = text.split_whitespace().collect();
             let mut chunks = Vec::new();
@@ -114,6 +125,8 @@ pub mod vector_search {
             chunks
         }
 
+        /// Compute cosine similarity between two vectors, returning 0.0 for
+        /// mismatched lengths or zero norms.
         fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
             if a.len() != b.len() {
                 return 0.0;
@@ -130,6 +143,8 @@ pub mod vector_search {
             dot_product / (norm_a * norm_b)
         }
 
+        /// Obtain an embedding for the provided text using the configured model,
+        /// creating a runtime if one is not already available.
         fn embed_text(&self, text: &str) -> Result<Vec<f64>, Box<dyn Error>> {
             let model = Model::new(
                 self.model_name.clone(),
@@ -152,6 +167,8 @@ pub mod vector_search {
             }
         }
 
+        /// Perform vector search over the provided files, returning the top
+        /// matches with similarity scores.
         pub fn search(
             &self,
             files: Vec<String>,

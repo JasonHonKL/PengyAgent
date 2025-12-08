@@ -1,14 +1,19 @@
 pub mod summarizer {
+    //! Emits a marker indicating the conversation should be summarized to keep
+    //! context length manageable.
+
     use crate::tool::tool::tool::{Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
     use std::error::Error;
 
+    /// Requests conversation summarization without requiring parameters.
     pub struct SummarizerTool {
         tool: Tool,
     }
 
     impl SummarizerTool {
+        /// Create the parameterless summarizer tool definition.
         pub fn new() -> Self {
             let tool = Tool {
                 name: "summarizer".to_string(),
@@ -26,6 +31,8 @@ pub mod summarizer {
             self.tool.get_json()
         }
 
+        /// Validate the empty arguments object and return the summarization
+        /// marker for upstream handling.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments - should be empty or {}
             let _args: serde_json::Value = serde_json::from_str(arguments)?;

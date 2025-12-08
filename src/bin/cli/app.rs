@@ -11,8 +11,12 @@ use ratatui::widgets::{ListState, ScrollbarState};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
-use std::{env, error::Error, path::PathBuf};
+use std::{env, error::Error, fs, path::PathBuf};
 use tokio::sync::mpsc;
+
+const SESSION_DIR: &str = "pengy_sessions";
+const SESSION_FILE_PREFIX: &str = "session_";
+const MAX_TITLE_LEN: usize = 64;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum AppState {
@@ -72,6 +76,18 @@ pub struct Config {
     pub selected_model: Option<ModelOption>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct PersistedMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedSession {
+    title: String,
+    messages: Vec<PersistedMessage>,
+}
+
 pub struct App {
     pub(crate) state: AppState,
     pub(crate) api_key: String,
@@ -91,6 +107,7 @@ pub struct App {
     pub(crate) agent_list_state: ListState,
     pub(crate) session_list_state: ListState,
     pub(crate) sessions: Vec<String>,
+    pub(crate) session_paths: Vec<PathBuf>,
     pub(crate) current_session: usize,
     pub(crate) settings_api_key: String,
     pub(crate) settings_base_url: String,
@@ -103,6 +120,7 @@ pub struct App {
     pub(crate) custom_model_field: usize,
     pub(crate) previous_state: Option<AppState>,
     pub(crate) user_scrolled: bool,
+    pub(crate) session_dirty: bool,
     pub(crate) rx: mpsc::UnboundedReceiver<AgentEvent>,
     pub(crate) tx: mpsc::UnboundedSender<AgentEvent>,
     pub(crate) agent_rx: mpsc::UnboundedReceiver<Agent>,
@@ -114,6 +132,189 @@ pub struct App {
 impl App {
     fn load_logo() -> String {
         EMBED_LOGO.to_string()
+    }
+
+    fn session_dir() -> PathBuf {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(SESSION_DIR)
+    }
+
+    fn ensure_session_dir() -> PathBuf {
+        let dir = Self::session_dir();
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn truncate_title(input: &str) -> String {
+        let trimmed = input.trim();
+        if trimmed.len() <= MAX_TITLE_LEN {
+            return trimmed.to_string();
+        }
+        trimmed
+            .chars()
+            .take(MAX_TITLE_LEN)
+            .collect::<String>()
+            .trim()
+            .to_string()
+    }
+
+    fn session_file_from_title(title: &str) -> PathBuf {
+        let sanitized: String = title
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Self::session_dir().join(format!("{}{}_{}.json", SESSION_FILE_PREFIX, ts, sanitized))
+    }
+
+    fn chat_to_persist(chat: &[ChatMessage]) -> Vec<PersistedMessage> {
+        chat.iter()
+            .map(|m| match m {
+                ChatMessage::User(t) => PersistedMessage {
+                    role: "user".to_string(),
+                    content: t.clone(),
+                },
+                ChatMessage::Assistant(t) => PersistedMessage {
+                    role: "assistant".to_string(),
+                    content: t.clone(),
+                },
+                ChatMessage::ToolCall { name, args, result, .. } => {
+                    let content = if let Some(r) = result {
+                        format!("[tool {}]\nargs: {}\nresult: {}", name, args, r)
+                    } else {
+                        format!("[tool {}]\nargs: {}", name, args)
+                    };
+                    PersistedMessage {
+                        role: "assistant".to_string(),
+                        content,
+                    }
+                }
+                ChatMessage::Thinking(t) => PersistedMessage {
+                    role: "assistant".to_string(),
+                    content: t.clone(),
+                },
+                ChatMessage::Error(t) => PersistedMessage {
+                    role: "assistant".to_string(),
+                    content: format!("Error: {}", t),
+                },
+            })
+            .collect()
+    }
+
+    fn persist_to_chat(msgs: &[PersistedMessage]) -> Vec<ChatMessage> {
+        msgs.iter()
+            .map(|m| match m.role.as_str() {
+                "user" => ChatMessage::User(m.content.clone()),
+                _ => ChatMessage::Assistant(m.content.clone()),
+            })
+            .collect()
+    }
+
+    fn write_session_file(path: &PathBuf, title: &str, messages: &[ChatMessage]) {
+        let dir = Self::ensure_session_dir();
+        let _ = fs::create_dir_all(&dir);
+        let data = PersistedSession {
+            title: title.to_string(),
+            messages: Self::chat_to_persist(messages),
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&data) {
+            let _ = fs::write(path, json);
+        }
+    }
+
+    fn read_session_file(path: &PathBuf) -> Option<(String, Vec<ChatMessage>)> {
+        let content = fs::read_to_string(path).ok()?;
+        let parsed: PersistedSession = serde_json::from_str(&content).ok()?;
+        let chat = Self::persist_to_chat(&parsed.messages);
+        Some((parsed.title, chat))
+    }
+
+    fn load_sessions_from_disk() -> (Vec<String>, Vec<PathBuf>, usize, Vec<ChatMessage>) {
+        let dir = Self::ensure_session_dir();
+        let mut entries: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+        if let Ok(read_dir) = fs::read_dir(&dir) {
+            for entry in read_dir.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if entry
+                        .path()
+                        .extension()
+                        .map(|e| e == "json")
+                        .unwrap_or(false)
+                    {
+                        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        entries.push((modified, entry.path()));
+                    }
+                }
+            }
+        }
+
+        // Sort newest first
+        entries.sort_by(|a, b| b.0.cmp(&a.0));
+
+        let mut titles = Vec::new();
+        let mut paths = Vec::new();
+        let mut first_messages = Vec::new();
+        let mut current_idx = 0;
+
+        for (idx, (_, path)) in entries.iter().enumerate() {
+            if let Some((title, messages)) = Self::read_session_file(&path.to_path_buf()) {
+                titles.push(title);
+                paths.push(path.to_path_buf());
+                if idx == 0 {
+                    first_messages = messages;
+                }
+            }
+        }
+
+        if titles.is_empty() {
+            let title = "New session - default".to_string();
+            let path = dir.join(format!("{}{}.json", SESSION_FILE_PREFIX, "default"));
+            Self::write_session_file(&path, &title, &[]);
+            titles.push(title);
+            paths.push(path);
+        }
+
+        (titles, paths, current_idx, first_messages)
+    }
+
+    pub(crate) fn save_current_session(&mut self) {
+        if let (Some(title), Some(path)) = (
+            self.sessions.get(self.current_session),
+            self.session_paths.get(self.current_session),
+        ) {
+            Self::write_session_file(path, title, &self.chat_messages);
+            self.session_dirty = false;
+        }
+    }
+
+    pub(crate) fn load_session(&mut self, idx: usize) {
+        if let Some(path) = self.session_paths.get(idx).cloned() {
+            if let Some((title, messages)) = Self::read_session_file(&path) {
+                if let Some(slot) = self.sessions.get_mut(idx) {
+                    *slot = title;
+                }
+                self.chat_messages = messages;
+                self.current_session = idx;
+                self.session_list_state.select(Some(idx));
+                self.list_state.select(None);
+                self.user_scrolled = false;
+                self.session_dirty = false;
+            }
+        }
+    }
+
+    fn maybe_update_session_title(&mut self, user_input: &str) {
+        if self.chat_messages.is_empty() {
+            let new_title = Self::truncate_title(user_input);
+            if let Some(title_slot) = self.sessions.get_mut(self.current_session) {
+                *title_slot = new_title.clone();
+            }
+            self.session_dirty = true;
+        }
     }
 
     fn config_path() -> PathBuf {
@@ -166,6 +367,9 @@ impl App {
             .join(".pengy_todo.json");
         let _ = std::fs::remove_file(&todo_file);
 
+        let (sessions, session_paths, current_session, initial_messages) =
+            Self::load_sessions_from_disk();
+
         Ok(Self {
             state: AppState::Welcome,
             api_key: api_key.clone(),
@@ -173,7 +377,7 @@ impl App {
             model: None,
             agent: None,
             selected_agent: AgentType::Coder,
-            chat_messages: Vec::new(),
+            chat_messages: initial_messages,
             logo,
             list_state,
             scroll_state: ScrollbarState::default(),
@@ -185,11 +389,12 @@ impl App {
             agent_list_state,
             session_list_state: {
                 let mut s = ListState::default();
-                s.select(Some(0));
+                s.select(Some(current_session));
                 s
             },
-            sessions: vec!["New session - default".to_string()],
-            current_session: 0,
+            sessions,
+            session_paths,
+            current_session,
             settings_api_key: api_key,
             settings_base_url,
             settings_field: 0,
@@ -201,6 +406,7 @@ impl App {
             custom_model_field: 0,
             previous_state: None,
             user_scrolled: false,
+            session_dirty: false,
             rx,
             tx,
             agent_rx,
@@ -244,7 +450,9 @@ impl App {
             .unwrap_or_default()
             .as_secs();
         let name = format!("Session {}", ts);
-        self.sessions.push(name);
+        let path = Self::session_file_from_title(&name);
+        self.sessions.push(name.clone());
+        self.session_paths.push(path.clone());
         self.current_session = self.sessions.len().saturating_sub(1);
         self.session_list_state.select(Some(self.current_session));
         self.chat_messages.clear();
@@ -257,6 +465,7 @@ impl App {
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
             .join(".pengy_todo.json");
         let _ = std::fs::remove_file(&todo_file);
+        Self::write_session_file(&path, &name, &[]);
     }
 
     pub(crate) fn get_available_models() -> Vec<ModelOption> {
@@ -448,6 +657,8 @@ impl App {
         vec![
             ("/models", "select model"),
             ("/agents", "select agent"),
+            ("/sessions", "switch session"),
+            ("/new", "create new session"),
             ("/settings", "configure API key / model / base URL"),
             (
                 "/baseurl",
@@ -587,11 +798,13 @@ impl App {
         }
 
         let user_input = self.chat_input.clone();
+        self.maybe_update_session_title(&user_input);
         self.chat_input.clear();
         self.input_cursor = 0;
 
         self.chat_messages
             .push(ChatMessage::User(user_input.clone()));
+        self.session_dirty = true;
         self.loading = true;
         self.error = None;
         self.user_scrolled = false;
@@ -683,10 +896,12 @@ impl App {
         if !self.chat_messages.is_empty() && !self.user_scrolled {
             self.list_state.select(Some(self.chat_messages.len() - 1));
         }
+        self.save_current_session();
         Ok(())
     }
 
     pub(crate) fn process_events(&mut self) {
+        let mut changed = false;
         while let Ok(agent) = self.agent_rx.try_recv() {
             self.agent = Some(agent);
         }
@@ -710,6 +925,7 @@ impl App {
                             result: Some(result.clone()),
                             status: ToolStatus::Success,
                         });
+                        changed = true;
 
                         if name == "edit" {
                             if let Ok(json_args) =
@@ -742,17 +958,21 @@ impl App {
                             result: Some(result),
                             status: ToolStatus::Success,
                         });
+                        changed = true;
                     }
                 }
                 AgentEvent::Thinking { content } => {
                     self.chat_messages.push(ChatMessage::Thinking(content));
+                    changed = true;
                 }
                 AgentEvent::FinalResponse { content } => {
                     self.chat_messages.push(ChatMessage::Assistant(content));
                     self.loading = false;
+                    changed = true;
                 }
                 AgentEvent::Error { error } => {
                     self.chat_messages.push(ChatMessage::Error(error.clone()));
+                    changed = true;
                     if let Some(ChatMessage::ToolCall { status, .. }) =
                         self.chat_messages.iter_mut().rev().find(|m| {
                             matches!(
@@ -770,9 +990,15 @@ impl App {
                 }
                 AgentEvent::VisionAnalysis { status } => {
                     self.chat_messages
-                        .push(ChatMessage::Thinking(format!("👁 {}", status)));
+                        .push(ChatMessage::Thinking(format!("[vision] {}", status)));
+                    changed = true;
                 }
             }
+        }
+
+        if changed {
+            self.session_dirty = true;
+            self.save_current_session();
         }
     }
 }

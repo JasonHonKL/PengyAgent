@@ -1,4 +1,7 @@
 pub mod vision_judge {
+    //! Capture screenshots or read images from disk and return them as data URLs
+    //! for downstream vision model consumption.
+
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
     use std::collections::HashMap;
@@ -6,11 +9,14 @@ pub mod vision_judge {
     use std::fs;
     use std::path::Path;
 
+    /// Provides access to on-demand screenshots or existing image files.
     pub struct VisionJudgeTool {
         tool: Tool,
     }
 
     impl VisionJudgeTool {
+        /// Define the vision_judge tool schema with optional screenshot or file
+        /// path inputs.
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
 
@@ -47,6 +53,8 @@ pub mod vision_judge {
             Self { tool }
         }
 
+        /// Read an image from disk and return a base64 data URL with an
+        /// appropriate MIME type.
         fn image_to_data_url(image_path: &str) -> Result<String, Box<dyn Error>> {
             // Read the image file
             let image_data = fs::read(image_path)?;
@@ -72,6 +80,7 @@ pub mod vision_judge {
             Ok(format!("data:{};base64,{}", mime_type, base64_data))
         }
 
+        /// Capture the primary screen and return a PNG data URL.
         fn capture_screenshot() -> Result<String, Box<dyn Error>> {
             // Use screenshots crate to capture screen
             let screens = screenshots::Screen::all()?;
@@ -95,6 +104,8 @@ pub mod vision_judge {
             Ok(format!("data:image/png;base64,{}", base64_data))
         }
 
+        /// Decide whether to read a provided image or capture a screenshot and
+        /// return the resulting data URL.
         fn execute_vision_judge(
             &self,
             image_path: Option<&str>,
@@ -123,6 +134,7 @@ pub mod vision_judge {
             self.tool.get_json()
         }
 
+        /// Parse arguments and invoke the requested image acquisition path.
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
