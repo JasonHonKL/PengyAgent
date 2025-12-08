@@ -79,7 +79,8 @@ pub(crate) fn parse_cmd_args() -> Option<(String, String, String, String, String
         }
     }
 
-    if let (Some(p), Some(a), Some(m), Some(pr), Some(k)) = (prompt, agent, model, provider, api_key)
+    if let (Some(p), Some(a), Some(m), Some(pr), Some(k)) =
+        (prompt, agent, model, provider, api_key)
     {
         Some((p, a, m, pr, k, base_url))
     } else {
@@ -113,9 +114,9 @@ pub(crate) async fn run_cmd_mode(
         DEFAULT_BASE_URL.to_string()
     } else {
         let models = App::get_available_models();
-        let found_model = models.iter().find(|m| {
-            m.name == model_name && m.provider.to_lowercase() == provider.to_lowercase()
-        });
+        let found_model = models
+            .iter()
+            .find(|m| m.name == model_name && m.provider.to_lowercase() == provider.to_lowercase());
 
         if let Some(m) = found_model {
             App::normalize_base_url(&m.base_url)
@@ -163,6 +164,7 @@ pub(crate) async fn run_cmd_mode(
                 base_url,
                 Some("openai/text-embedding-3-small".to_string()),
                 prompt,
+                None,
                 Some(3),
                 Some(50),
                 callback,
@@ -201,4 +203,3 @@ pub(crate) async fn run_cmd_mode(
 
     Ok(())
 }
-

@@ -1,9 +1,9 @@
 pub mod file_manager {
+    use serde_json;
     use std::collections::HashMap;
     use std::error::Error;
     use std::fs;
     use std::path::{Component, Path, PathBuf};
-    use serde_json;
 
     use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
 
@@ -35,7 +35,8 @@ pub mod file_manager {
                 "kind".to_string(),
                 Parameter {
                     items: kind_items,
-                    description: "What to create. Use 'file' (default) or 'directory'/'folder'.".to_string(),
+                    description: "What to create. Use 'file' (default) or 'directory'/'folder'."
+                        .to_string(),
                     enum_values: Some(vec![
                         "file".to_string(),
                         "directory".to_string(),
@@ -83,7 +84,8 @@ pub mod file_manager {
                 "overwrite".to_string(),
                 Parameter {
                     items: overwrite_items,
-                    description: "If true, replace an existing file. Directories are not removed.".to_string(),
+                    description: "If true, replace an existing file. Directories are not removed."
+                        .to_string(),
                     enum_values: None,
                 },
             );
@@ -121,7 +123,10 @@ pub mod file_manager {
 
             let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-            Self { tool, workspace_root }
+            Self {
+                tool,
+                workspace_root,
+            }
         }
 
         fn clean_path(path: &Path) -> PathBuf {
@@ -142,14 +147,11 @@ pub mod file_manager {
 
         fn resolve_path(&self, raw_path: &str) -> Result<PathBuf, Box<dyn Error>> {
             // Try to canonicalize workspace_root, but fall back to absolute path if it doesn't exist
-            let workspace_root = self.workspace_root
-                .canonicalize()
-                .unwrap_or_else(|_| {
-                    // If canonicalize fails, use absolute path
-                    std::fs::canonicalize(".")
-                        .unwrap_or_else(|_| self.workspace_root.clone())
-                });
-            
+            let workspace_root = self.workspace_root.canonicalize().unwrap_or_else(|_| {
+                // If canonicalize fails, use absolute path
+                std::fs::canonicalize(".").unwrap_or_else(|_| self.workspace_root.clone())
+            });
+
             let candidate = if Path::new(raw_path).is_absolute() {
                 PathBuf::from(raw_path)
             } else {
@@ -158,20 +160,26 @@ pub mod file_manager {
             };
 
             let normalized = Self::clean_path(&candidate);
-            
+
             // Normalize workspace_root for comparison
             let normalized_workspace = Self::clean_path(&workspace_root);
 
             // Check if normalized path is within workspace
             // Try canonicalizing both for proper comparison (handles symlinks)
-            let normalized_canonical = normalized.canonicalize().unwrap_or_else(|_| normalized.clone());
-            let workspace_canonical = normalized_workspace.canonicalize().unwrap_or_else(|_| normalized_workspace.clone());
-            
+            let normalized_canonical = normalized
+                .canonicalize()
+                .unwrap_or_else(|_| normalized.clone());
+            let workspace_canonical = normalized_workspace
+                .canonicalize()
+                .unwrap_or_else(|_| normalized_workspace.clone());
+
             // Use string comparison as a fallback for cross-platform compatibility
             let normalized_str = normalized_canonical.to_string_lossy().to_string();
             let workspace_str = workspace_canonical.to_string_lossy().to_string();
-            
-            if !normalized_str.starts_with(&workspace_str) && !normalized_canonical.starts_with(&workspace_canonical) {
+
+            if !normalized_str.starts_with(&workspace_str)
+                && !normalized_canonical.starts_with(&workspace_canonical)
+            {
                 return Err(format!(
                     "Path is outside the workspace. Requested: {}, workspace root: {}. Use full absolute paths within the workspace.",
                     normalized_canonical.display(),
@@ -181,11 +189,14 @@ pub mod file_manager {
             }
 
             // Return canonicalized absolute path if possible, otherwise return normalized path
-            Ok(normalized.canonicalize()
-                .unwrap_or_else(|_| normalized))
+            Ok(normalized.canonicalize().unwrap_or_else(|_| normalized))
         }
 
-        fn create_directory(&self, path: &Path, create_parents: bool) -> Result<String, Box<dyn Error>> {
+        fn create_directory(
+            &self,
+            path: &Path,
+            create_parents: bool,
+        ) -> Result<String, Box<dyn Error>> {
             if path.exists() {
                 if path.is_dir() {
                     return Ok(format!("Directory already exists at {}", path.display()));
@@ -232,37 +243,44 @@ pub mod file_manager {
                     ).into());
                 }
                 if path.is_dir() {
-                    return Err(format!("Path is a directory, not a file: {}", path.display()).into());
+                    return Err(
+                        format!("Path is a directory, not a file: {}", path.display()).into(),
+                    );
                 }
 
                 // Read existing file
                 let existing_content = fs::read_to_string(path)?;
                 let lines: Vec<&str> = existing_content.lines().collect();
-                
+
                 // Validate line numbers (1-based to 0-based conversion)
                 if start < 1 || end < 1 {
                     return Err("Line numbers must be 1-based (start from 1)".into());
                 }
                 if start > end {
-                    return Err(format!("startLine ({}) must be <= endLine ({})", start, end).into());
+                    return Err(
+                        format!("startLine ({}) must be <= endLine ({})", start, end).into(),
+                    );
                 }
                 if start > lines.len() || end > lines.len() {
                     return Err(format!(
                         "Line numbers out of range: file has {} lines, but requested lines {}-{}",
-                        lines.len(), start, end
-                    ).into());
+                        lines.len(),
+                        start,
+                        end
+                    )
+                    .into());
                 }
 
                 // Build new content: lines before + new content + lines after
                 let mut new_lines = Vec::new();
-                
+
                 // Lines before the replacement (0-based: start-1)
                 new_lines.extend_from_slice(&lines[..(start - 1)]);
-                
+
                 // New content (split by lines)
                 let new_content_lines: Vec<&str> = content.lines().collect();
                 new_lines.extend(new_content_lines);
-                
+
                 // Lines after the replacement (0-based: end, which is exclusive, so we use end)
                 if end < lines.len() {
                     new_lines.extend_from_slice(&lines[end..]);
@@ -278,13 +296,20 @@ pub mod file_manager {
                 };
 
                 fs::write(path, new_content)?;
-                return Ok(format!("Replaced lines {}-{} in {}", start, end, path.display()));
+                return Ok(format!(
+                    "Replaced lines {}-{} in {}",
+                    start,
+                    end,
+                    path.display()
+                ));
             }
 
             // Full file replacement (existing behavior)
             if path.exists() {
                 if path.is_dir() {
-                    return Err(format!("Path is a directory, not a file: {}", path.display()).into());
+                    return Err(
+                        format!("Path is a directory, not a file: {}", path.display()).into(),
+                    );
                 }
                 if !overwrite {
                     return Err(format!(
@@ -359,7 +384,14 @@ pub mod file_manager {
             if kind == "directory" || kind == "folder" {
                 self.create_directory(&target_path, create_parents)
             } else {
-                self.write_file(&target_path, &content, overwrite, create_parents, start_line, end_line)
+                self.write_file(
+                    &target_path,
+                    &content,
+                    overwrite,
+                    create_parents,
+                    start_line,
+                    end_line,
+                )
             }
         }
     }
@@ -396,7 +428,10 @@ pub mod file_manager {
                 // Combine results
                 let mut output = String::new();
                 if !results.is_empty() {
-                    output.push_str(&format!("Successfully processed {} file(s):\n", results.len()));
+                    output.push_str(&format!(
+                        "Successfully processed {} file(s):\n",
+                        results.len()
+                    ));
                     output.push_str(&results.join("\n"));
                 }
                 if !errors.is_empty() {
@@ -406,7 +441,7 @@ pub mod file_manager {
                     output.push_str(&format!("Failed to process {} file(s):\n", errors.len()));
                     output.push_str(&errors.join("\n"));
                 }
-                
+
                 // Handle empty array case
                 if results.is_empty() && errors.is_empty() {
                     output.push_str("Successfully processed 0 file(s)");
@@ -466,7 +501,11 @@ mod tests {
         );
 
         let result = tool.run(&args);
-        assert!(result.is_ok(), "Should write file successfully: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Should write file successfully: {:?}",
+            result
+        );
 
         // Verify file was created with correct content
         assert!(file_path.exists(), "File should exist");
@@ -490,7 +529,11 @@ mod tests {
         );
 
         let result = tool.run(&args);
-        assert!(result.is_ok(), "Should create parent directories and write file: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Should create parent directories and write file: {:?}",
+            result
+        );
 
         assert!(file_path.exists(), "File should exist");
         let read_content = fs::read_to_string(&file_path).unwrap();
@@ -559,7 +602,10 @@ mod tests {
                 "createParents": true
             }"#;
         let result = tool.run(args2);
-        assert!(result.is_err(), "Should fail when file exists and overwrite=false");
+        assert!(
+            result.is_err(),
+            "Should fail when file exists and overwrite=false"
+        );
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }
 
@@ -575,7 +621,10 @@ mod tests {
 
         let result = tool.run(args);
         assert!(result.is_ok(), "Should create directory");
-        assert!(dir_path.exists() && dir_path.is_dir(), "Directory should exist");
+        assert!(
+            dir_path.exists() && dir_path.is_dir(),
+            "Directory should exist"
+        );
     }
 
     #[test]
@@ -607,7 +656,10 @@ mod tests {
         let result = tool.run(args);
         assert!(result.is_ok(), "Should create file via run()");
         assert!(file_path.exists());
-        assert_eq!(fs::read_to_string(&file_path).unwrap(), "Test content from run");
+        assert_eq!(
+            fs::read_to_string(&file_path).unwrap(),
+            "Test content from run"
+        );
     }
 
     #[test]
@@ -625,7 +677,10 @@ mod tests {
         assert!(result.is_ok(), "Should handle JSON array content");
         assert!(file_path.exists());
         let content = fs::read_to_string(&file_path).unwrap();
-        assert!(content.contains("line1") || content.contains("line2"), "Should serialize array to string");
+        assert!(
+            content.contains("line1") || content.contains("line2"),
+            "Should serialize array to string"
+        );
     }
 
     #[test]
@@ -643,7 +698,10 @@ mod tests {
         assert!(result.is_ok(), "Should handle JSON object content");
         assert!(file_path.exists());
         let content = fs::read_to_string(&file_path).unwrap();
-        assert!(content.contains("key") || content.contains("value"), "Should serialize object to string");
+        assert!(
+            content.contains("key") || content.contains("value"),
+            "Should serialize object to string"
+        );
     }
 
     #[test]
@@ -748,7 +806,11 @@ mod tests {
         }"#;
 
         let result = tool.run(args);
-        assert!(result.is_ok(), "Should process batch operations successfully: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Should process batch operations successfully: {:?}",
+            result
+        );
 
         // Verify all files were created
         let file1 = temp_dir.path().join("batch1.txt");
@@ -757,7 +819,10 @@ mod tests {
 
         assert!(file1.exists(), "batch1.txt should exist");
         assert!(file2.exists(), "batch2.txt should exist");
-        assert!(dir.exists() && dir.is_dir(), "batch_dir should exist as directory");
+        assert!(
+            dir.exists() && dir.is_dir(),
+            "batch_dir should exist as directory"
+        );
 
         assert_eq!(fs::read_to_string(&file1).unwrap(), "File 1 content");
         assert_eq!(fs::read_to_string(&file2).unwrap(), "File 2 content");
@@ -766,7 +831,7 @@ mod tests {
     #[test]
     fn test_batch_operations_partial_failure() {
         let (tool, temp_dir) = create_test_tool();
-        
+
         // Create a file that will conflict
         let existing_file = temp_dir.path().join("existing.txt");
         fs::write(&existing_file, "existing").unwrap();
@@ -791,7 +856,7 @@ mod tests {
         let result = tool.run(args);
         // Should return error for partial failure
         assert!(result.is_err(), "Should return error for partial failure");
-        
+
         // But first file should still be created
         let new_file = temp_dir.path().join("new_file.txt");
         assert!(new_file.exists(), "new_file.txt should be created");
@@ -811,7 +876,7 @@ mod tests {
     fn test_line_based_replacement() {
         let (tool, temp_dir) = create_test_tool();
         let file_path = temp_dir.path().join("test_lines.txt");
-        
+
         // Create initial file with multiple lines
         let initial_content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n";
         fs::write(&file_path, initial_content).unwrap();
@@ -830,7 +895,11 @@ mod tests {
         );
 
         let result = tool.run(&args);
-        assert!(result.is_ok(), "Should replace lines successfully: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Should replace lines successfully: {:?}",
+            result
+        );
 
         // Verify replacement
         let content = fs::read_to_string(&file_path).unwrap();
@@ -847,7 +916,7 @@ mod tests {
     fn test_line_based_replacement_single_line() {
         let (tool, temp_dir) = create_test_tool();
         let file_path = temp_dir.path().join("test_single_line.txt");
-        
+
         // Create initial file
         let initial_content = "Line 1\nLine 2\nLine 3\n";
         fs::write(&file_path, initial_content).unwrap();
@@ -870,7 +939,10 @@ mod tests {
 
         let content = fs::read_to_string(&file_path).unwrap();
         assert!(content.contains("Line 1"), "Line 1 should remain");
-        assert!(content.contains("Replaced Line 2"), "Line 2 should be replaced");
+        assert!(
+            content.contains("Replaced Line 2"),
+            "Line 2 should be replaced"
+        );
         assert!(content.contains("Line 3"), "Line 3 should remain");
     }
 
@@ -893,8 +965,16 @@ mod tests {
         );
 
         let result = tool.run(&args);
-        assert!(result.is_err(), "Should fail when only one line number is provided");
-        assert!(result.unwrap_err().to_string().contains("startLine and endLine"));
+        assert!(
+            result.is_err(),
+            "Should fail when only one line number is provided"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("startLine and endLine")
+        );
     }
 
     #[test]
@@ -917,9 +997,10 @@ mod tests {
         );
 
         let result = tool.run(&args);
-        assert!(result.is_err(), "Should fail when line numbers are out of range");
+        assert!(
+            result.is_err(),
+            "Should fail when line numbers are out of range"
+        );
         assert!(result.unwrap_err().to_string().contains("out of range"));
     }
 }
-
-

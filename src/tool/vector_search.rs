@@ -1,11 +1,11 @@
 pub mod vector_search {
+    use crate::model::model::model::Model;
+    use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
+    use serde_json;
     use std::collections::HashMap;
+    use std::error::Error;
     use std::fs;
     use std::path::Path;
-    use serde_json;
-    use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
-    use crate::model::model::model::Model;
 
     pub struct VectorSearchTool {
         tool: Tool,
@@ -17,7 +17,7 @@ pub mod vector_search {
     impl VectorSearchTool {
         pub fn new(api_key: String, model_name: String, base_url: String) -> Self {
             let mut parameters = HashMap::new();
-            
+
             // files parameter (required)
             let mut files_items = HashMap::new();
             files_items.insert("type".to_string(), "array".to_string());
@@ -49,11 +49,15 @@ pub mod vector_search {
             // top_k parameter (optional)
             let mut top_k_items = HashMap::new();
             top_k_items.insert("type".to_string(), "number".to_string());
-            parameters.insert("top_k".to_string(), Parameter {
-                items: top_k_items,
-                description: "Number of top results to return. Defaults to 5 if not provided.".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "top_k".to_string(),
+                Parameter {
+                    items: top_k_items,
+                    description: "Number of top results to return. Defaults to 5 if not provided."
+                        .to_string(),
+                    enum_values: None,
+                },
+            );
 
             let tool = Tool {
                 name: "vector_search".to_string(),
@@ -72,17 +76,18 @@ pub mod vector_search {
 
         fn read_text_file(&self, file_path: &str) -> Result<String, Box<dyn Error>> {
             let path = Path::new(file_path);
-            
+
             if !path.exists() {
                 return Err(format!("File not found: {}", file_path).into());
             }
 
             // Check if it's a text file (simple check - could be improved)
-            let extension = path.extension()
+            let extension = path
+                .extension()
                 .and_then(|ext| ext.to_str())
                 .unwrap_or("")
                 .to_lowercase();
-            
+
             // Warn about PDF files
             if extension == "pdf" {
                 return Err("PDF files cannot be searched directly. Please convert to markdown first using the docs_reader tool.".into());
@@ -135,10 +140,9 @@ pub mod vector_search {
             // Use tokio runtime to run async code in sync context
             // Try to use current runtime handle first, otherwise create new runtime
             match tokio::runtime::Handle::try_current() {
-                Ok(handle) => {
-                    handle.block_on(model.completion_open_router_embedding(text.to_string()))
-                        .map_err(|e| e as Box<dyn Error>)
-                }
+                Ok(handle) => handle
+                    .block_on(model.completion_open_router_embedding(text.to_string()))
+                    .map_err(|e| e as Box<dyn Error>),
                 Err(_) => {
                     // Not in a tokio runtime, create a new one
                     let rt = tokio::runtime::Runtime::new()?;
@@ -148,11 +152,15 @@ pub mod vector_search {
             }
         }
 
-        pub fn search(&self, files: Vec<String>, query: String, chunk_size: Option<usize>, top_k: Option<usize>) -> Result<String, Box<dyn Error>> {
+        pub fn search(
+            &self,
+            files: Vec<String>,
+            query: String,
+            chunk_size: Option<usize>,
+            top_k: Option<usize>,
+        ) -> Result<String, Box<dyn Error>> {
             // Determine chunk size (min of 2000 and provided value)
-            let chunk_size_words = chunk_size
-                .map(|s| s.min(2000))
-                .unwrap_or(2000);
+            let chunk_size_words = chunk_size.map(|s| s.min(2000)).unwrap_or(2000);
 
             let top_k = top_k.unwrap_or(5);
 
@@ -188,7 +196,12 @@ pub mod vector_search {
             for (file_path, chunk_text, chunk_idx) in &all_chunks {
                 match self.embed_text(chunk_text) {
                     Ok(embedding) => {
-                        chunk_embeddings.push((file_path.clone(), chunk_text.clone(), *chunk_idx, embedding));
+                        chunk_embeddings.push((
+                            file_path.clone(),
+                            chunk_text.clone(),
+                            *chunk_idx,
+                            embedding,
+                        ));
                     }
                     Err(e) => {
                         eprintln!("Warning: Failed to embed chunk from {}: {}", file_path, e);
@@ -221,9 +234,18 @@ pub mod vector_search {
             result_lines.push(format!("Top {} results for query: \"{}\"", top_k, query));
             result_lines.push("=".repeat(80));
 
-            for (idx, (file_path, chunk_text, chunk_idx, similarity)) in top_results.iter().enumerate() {
-                result_lines.push(format!("\n[Result {}] Similarity: {:.4}", idx + 1, similarity));
-                result_lines.push(format!("File: {} (chunk starting at word {})", file_path, chunk_idx));
+            for (idx, (file_path, chunk_text, chunk_idx, similarity)) in
+                top_results.iter().enumerate()
+            {
+                result_lines.push(format!(
+                    "\n[Result {}] Similarity: {:.4}",
+                    idx + 1,
+                    similarity
+                ));
+                result_lines.push(format!(
+                    "File: {} (chunk starting at word {})",
+                    file_path, chunk_idx
+                ));
                 result_lines.push(format!("Content:\n{}", chunk_text));
                 result_lines.push("-".repeat(80));
             }
@@ -240,9 +262,10 @@ pub mod vector_search {
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
-            
+
             // Get required files parameter
-            let files_array = args.get("files")
+            let files_array = args
+                .get("files")
                 .and_then(|v| v.as_array())
                 .ok_or("Missing required parameter: files (must be an array of file paths)")?;
 
@@ -256,18 +279,21 @@ pub mod vector_search {
             }
 
             // Get required query parameter
-            let query = args.get("query")
+            let query = args
+                .get("query")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: query")?
                 .to_string();
 
             // Get optional chunk_size parameter
-            let chunk_size = args.get("chunk_size")
+            let chunk_size = args
+                .get("chunk_size")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
 
             // Get optional top_k parameter
-            let top_k = args.get("top_k")
+            let top_k = args
+                .get("top_k")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
 
@@ -280,4 +306,3 @@ pub mod vector_search {
         }
     }
 }
-

@@ -1,12 +1,12 @@
 pub mod issue_agent {
-    use crate::model::model::model::Model;
     use crate::agent::agent::agent::Agent;
+    use crate::model::model::model::Model;
     use crate::tool::bash::bash::BashTool;
     use crate::tool::edit::edit::EditTool;
-    use crate::tool::todo::todo::TodoTool;
+    use crate::tool::end::end::EndTool;
     use crate::tool::github_tool::github_tool::GithubTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
-    use crate::tool::end::end::EndTool;
+    use crate::tool::todo::todo::TodoTool;
     use crate::tool::tool::tool::ToolCall;
 
     /// Creates an issue-focused agent responsible for finding and reporting issues.
@@ -73,14 +73,6 @@ CRITICAL SECURITY RULE: When asked to create files, you MUST write files ONLY in
 
         let final_system_prompt = system_prompt.unwrap_or(default_system_prompt);
 
-        Agent::new(
-            model,
-            tools,
-            final_system_prompt,
-            max_retry,
-            max_step,
-        )
+        Agent::new(model, tools, final_system_prompt, max_retry, max_step)
     }
 }
-
-

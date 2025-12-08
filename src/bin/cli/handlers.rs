@@ -23,7 +23,8 @@ pub(crate) fn handle_welcome_key(
                     app.previous_state = Some(AppState::Welcome);
                     app.state = AppState::SessionSelector;
                     app.session_list_state.select(Some(
-                        app.current_session.min(app.sessions.len().saturating_sub(1)),
+                        app.current_session
+                            .min(app.sessions.len().saturating_sub(1)),
                     ));
                     app.chat_input.clear();
                     app.input_cursor = 0;
@@ -81,7 +82,8 @@ pub(crate) fn handle_chat_key(
                     app.previous_state = Some(AppState::Chat);
                     app.state = AppState::SessionSelector;
                     app.session_list_state.select(Some(
-                        app.current_session.min(app.sessions.len().saturating_sub(1)),
+                        app.current_session
+                            .min(app.sessions.len().saturating_sub(1)),
                     ));
                     app.chat_input.clear();
                     app.input_cursor = 0;
@@ -102,8 +104,7 @@ pub(crate) fn handle_chat_key(
             if len > 0 {
                 let selected = app.list_state.selected().unwrap_or(len.saturating_sub(1));
                 let amount = match key {
-                    crossterm::event::KeyCode::PageUp
-                    | crossterm::event::KeyCode::PageDown => 10,
+                    crossterm::event::KeyCode::PageUp | crossterm::event::KeyCode::PageDown => 10,
                     _ => 1,
                 };
                 let new_selection = match key {
@@ -132,6 +133,16 @@ pub(crate) fn handle_chat_key(
         crossterm::event::KeyCode::Home => {
             app.user_scrolled = true;
             app.list_state.select(Some(0));
+        }
+        crossterm::event::KeyCode::Tab => {
+            // Jump focus back to prompt/input
+            app.user_scrolled = false;
+            if !app.chat_messages.is_empty() {
+                app.list_state
+                    .select(Some(app.chat_messages.len().saturating_sub(1)));
+            }
+            app.input_cursor = app.chat_input.len();
+            app.show_command_hints = app.chat_input.starts_with('/');
         }
         crossterm::event::KeyCode::Char(c) => {
             app.chat_input.insert(app.input_cursor, c);
@@ -176,8 +187,9 @@ pub(crate) fn handle_command_inline(app: &mut App, cmd: &str, previous_state: Ap
         app.settings_field = 0;
         let models = App::get_available_models();
         if let Some(selected) = &app.selected_model {
-            if let Some(idx) =
-                models.iter().position(|m| m.name == selected.name && m.provider == selected.provider)
+            if let Some(idx) = models
+                .iter()
+                .position(|m| m.name == selected.name && m.provider == selected.provider)
             {
                 app.model_list_state.select(Some(idx));
             }
@@ -224,4 +236,3 @@ pub(crate) fn handle_command_inline(app: &mut App, cmd: &str, previous_state: Ap
     app.input_cursor = 0;
     app.show_command_hints = false;
 }
-

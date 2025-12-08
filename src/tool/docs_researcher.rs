@@ -1,10 +1,10 @@
 pub mod docs_researcher {
+    use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
+    use serde_json;
     use std::collections::HashMap;
+    use std::error::Error;
     use std::fs;
     use std::path::PathBuf;
-    use serde_json;
-    use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
 
     pub struct DocsResearcherTool {
         tool: Tool,
@@ -14,7 +14,7 @@ pub mod docs_researcher {
     impl DocsResearcherTool {
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
-            
+
             // action parameter (required)
             let mut action_items = HashMap::new();
             action_items.insert("type".to_string(), "string".to_string());
@@ -62,20 +62,16 @@ pub mod docs_researcher {
 
             let tool = Tool {
                 name: "docs_researcher".to_string(),
-                description: "Manage documents in the 'pengy_docs' folder. Use 'create' to create a new document, 'read' to read an entire document, or 'search' to search for content in a document with context lines. The tool will automatically create the 'pengy_docs' folder if it doesn't exist.".to_string(),
+                description: "Research assistant for this repo. Stores findings as Markdown files in 'pengy_docs'. Use 'create' to write structured research (with headers, links, code snippets) that future steps can read; 'read' to review an entire doc; 'search' to pull contextual snippets. Auto-creates 'pengy_docs' if missing. Stop researching once you have enough signal to implement.".to_string(),
                 parameters,
                 required: vec!["action".to_string()],
             };
 
             // Get the docs directory path
-            let current_dir = std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."));
+            let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let docs_dir = current_dir.join("pengy_docs");
 
-            Self {
-                tool,
-                docs_dir,
-            }
+            Self { tool, docs_dir }
         }
 
         fn ensure_docs_dir(&self) -> Result<(), Box<dyn Error>> {
@@ -89,7 +85,11 @@ pub mod docs_researcher {
             self.docs_dir.join(file_name)
         }
 
-        fn create_document(&self, file_name: &str, content: &str) -> Result<String, Box<dyn Error>> {
+        fn create_document(
+            &self,
+            file_name: &str,
+            content: &str,
+        ) -> Result<String, Box<dyn Error>> {
             // Ensure docs directory exists
             self.ensure_docs_dir()?;
 
@@ -99,7 +99,10 @@ pub mod docs_researcher {
             // Write content to file
             fs::write(&file_path, content)?;
 
-            Ok(format!("Document '{}' created successfully in pengy_docs folder.", file_name))
+            Ok(format!(
+                "Document '{}' created successfully in pengy_docs folder.",
+                file_name
+            ))
         }
 
         fn read_document(&self, file: &str) -> Result<String, Box<dyn Error>> {
@@ -110,11 +113,16 @@ pub mod docs_researcher {
             }
 
             let content = fs::read_to_string(&file_path)?;
-            
+
             Ok(content)
         }
 
-        fn search_document(&self, file: &str, search_term: &str, context_lines: usize) -> Result<String, Box<dyn Error>> {
+        fn search_document(
+            &self,
+            file: &str,
+            search_term: &str,
+            context_lines: usize,
+        ) -> Result<String, Box<dyn Error>> {
             let file_path = self.get_file_path(file);
 
             if !file_path.exists() {
@@ -133,7 +141,7 @@ pub mod docs_researcher {
             for (line_num, line) in lines.iter().enumerate() {
                 if line.to_lowercase().contains(&search_lower) {
                     found_any = true;
-                    
+
                     // Calculate start and end line indices
                     let start_line = line_num.saturating_sub(context_lines);
                     let end_line = (line_num + context_lines + 1).min(lines.len());
@@ -146,7 +154,7 @@ pub mod docs_researcher {
                     // Add context lines
                     for i in start_line..end_line {
                         let prefix = if i == line_num {
-                            ">>> "  // Mark the matching line
+                            ">>> " // Mark the matching line
                         } else {
                             "    "
                         };
@@ -156,7 +164,10 @@ pub mod docs_researcher {
             }
 
             if !found_any {
-                return Ok(format!("No matches found for '{}' in file '{}'.", search_term, file));
+                return Ok(format!(
+                    "No matches found for '{}' in file '{}'.",
+                    search_term, file
+                ));
             }
 
             Ok(results.join("\n"))
@@ -171,33 +182,36 @@ pub mod docs_researcher {
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
-            
+
             // Get the action
-            let action = args.get("action")
+            let action = args
+                .get("action")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: action")?;
 
             match action {
                 "create" => {
-                    let file_name = args.get("file_name")
-                        .and_then(|v| v.as_str())
-                        .ok_or("Missing required parameter: file_name (required for 'create' action)")?;
+                    let file_name = args.get("file_name").and_then(|v| v.as_str()).ok_or(
+                        "Missing required parameter: file_name (required for 'create' action)",
+                    )?;
 
-                    let content = args.get("content")
-                        .and_then(|v| v.as_str())
-                        .ok_or("Missing required parameter: content (required for 'create' action)")?;
+                    let content = args.get("content").and_then(|v| v.as_str()).ok_or(
+                        "Missing required parameter: content (required for 'create' action)",
+                    )?;
 
                     self.create_document(file_name, content)
                 }
                 "read" => {
-                    let file = args.get("file")
+                    let file = args
+                        .get("file")
                         .and_then(|v| v.as_str())
                         .ok_or("Missing required parameter: file (required for 'read' action)")?;
 
                     self.read_document(file)
                 }
                 "search" => {
-                    let file = args.get("file")
+                    let file = args
+                        .get("file")
                         .and_then(|v| v.as_str())
                         .ok_or("Missing required parameter: file (required for 'search' action)")?;
 
@@ -205,14 +219,19 @@ pub mod docs_researcher {
                         .and_then(|v| v.as_str())
                         .ok_or("Missing required parameter: content (required for 'search' action - this is the search term)")?;
 
-                    let context_lines = args.get("context_lines")
+                    let context_lines = args
+                        .get("context_lines")
                         .and_then(|v| v.as_u64())
                         .map(|v| v as usize)
                         .unwrap_or(10);
 
                     self.search_document(file, content, context_lines)
                 }
-                _ => Err(format!("Unknown action: {}. Must be 'create', 'read', or 'search'.", action).into())
+                _ => Err(format!(
+                    "Unknown action: {}. Must be 'create', 'read', or 'search'.",
+                    action
+                )
+                .into()),
             }
         }
 
@@ -221,5 +240,3 @@ pub mod docs_researcher {
         }
     }
 }
-
-

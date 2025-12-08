@@ -1,15 +1,15 @@
 pub mod test_agent {
-    use crate::model::model::model::Model;
     use crate::agent::agent::agent::Agent;
+    use crate::model::model::model::Model;
     use crate::tool::bash::bash::BashTool;
     use crate::tool::docs_researcher::docs_researcher::DocsResearcherTool;
     use crate::tool::edit::edit::EditTool;
-    use crate::tool::grep::grep::GrepTool;
-    use crate::tool::todo::todo::TodoTool;
-    use crate::tool::web::web::WebTool;
-    use crate::tool::summarizer::summarizer::SummarizerTool;
     use crate::tool::end::end::EndTool;
+    use crate::tool::grep::grep::GrepTool;
+    use crate::tool::summarizer::summarizer::SummarizerTool;
+    use crate::tool::todo::todo::TodoTool;
     use crate::tool::tool::tool::ToolCall;
+    use crate::tool::web::web::WebTool;
 
     /// Creates a test agent with the following tools:
     /// - bash: Execute bash commands in a persistent shell session
@@ -19,7 +19,7 @@ pub mod test_agent {
     /// - todo: Manage a todo list (read, insert, tick, delete tasks)
     /// - web: Fetch content from URLs using HTTP/HTTPS
     /// - end: End the current agent run early with an optional reason
-    /// 
+    ///
     /// This agent is responsible for testing code implemented by the coder agent.
     /// It creates test cases in the 'test' folder and ensures comprehensive test coverage.
     pub fn create_test_agent(
@@ -115,14 +115,6 @@ Remember: Your goal is to ensure the code written by the coder agent is reliable
 
         let final_system_prompt = system_prompt.unwrap_or(default_system_prompt);
 
-        Agent::new(
-            model,
-            tools,
-            final_system_prompt,
-            max_retry,
-            max_step,
-        )
+        Agent::new(model, tools, final_system_prompt, max_retry, max_step)
     }
 }
-
-

@@ -1,10 +1,10 @@
 pub mod edit {
+    use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
+    use serde_json;
     use std::collections::HashMap;
+    use std::error::Error;
     use std::fs;
     use std::path::Path;
-    use serde_json;
-    use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
 
     pub struct EditTool {
         tool: Tool,
@@ -13,42 +13,55 @@ pub mod edit {
     impl EditTool {
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
-            
+
             // filePath parameter (required)
             let mut file_path_items = HashMap::new();
             file_path_items.insert("type".to_string(), "string".to_string());
-            parameters.insert("filePath".to_string(), Parameter {
-                items: file_path_items,
-                description: "Absolute path to the file to modify.".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "filePath".to_string(),
+                Parameter {
+                    items: file_path_items,
+                    description: "Absolute path to the file to modify.".to_string(),
+                    enum_values: None,
+                },
+            );
 
             // oldString parameter (required)
             let mut old_string_items = HashMap::new();
             old_string_items.insert("type".to_string(), "string".to_string());
-            parameters.insert("oldString".to_string(), Parameter {
-                items: old_string_items,
-                description: "The text to replace.".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "oldString".to_string(),
+                Parameter {
+                    items: old_string_items,
+                    description: "The text to replace.".to_string(),
+                    enum_values: None,
+                },
+            );
 
             // newString parameter (required)
             let mut new_string_items = HashMap::new();
             new_string_items.insert("type".to_string(), "string".to_string());
-            parameters.insert("newString".to_string(), Parameter {
-                items: new_string_items,
-                description: "The replacement text (must differ from oldString).".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "newString".to_string(),
+                Parameter {
+                    items: new_string_items,
+                    description: "The replacement text (must differ from oldString).".to_string(),
+                    enum_values: None,
+                },
+            );
 
             // replaceAll parameter (optional)
             let mut replace_all_items = HashMap::new();
             replace_all_items.insert("type".to_string(), "boolean".to_string());
-            parameters.insert("replaceAll".to_string(), Parameter {
-                items: replace_all_items,
-                description: "Replace all occurrences of oldString (default false).".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "replaceAll".to_string(),
+                Parameter {
+                    items: replace_all_items,
+                    description: "Replace all occurrences of oldString (default false)."
+                        .to_string(),
+                    enum_values: None,
+                },
+            );
 
             let tool = Tool {
                 name: "edit".to_string(),
@@ -120,7 +133,8 @@ pub mod edit {
             let normalized_old = Self::normalize_line_endings(old_string);
             if let Some(norm_pos) = normalized_content.find(&normalized_old) {
                 // Map back to original: count characters up to position
-                let original_pos = Self::map_normalized_to_original(content, &normalized_content, norm_pos);
+                let original_pos =
+                    Self::map_normalized_to_original(content, &normalized_content, norm_pos);
                 return Some((original_pos, original_pos + old_string.len()));
             }
 
@@ -133,7 +147,8 @@ pub mod edit {
             let normalized_content = Self::normalize_indentation(content);
             let normalized_old = Self::normalize_indentation(old_string);
             if let Some(norm_pos) = normalized_content.find(&normalized_old) {
-                let original_pos = Self::map_normalized_to_original(content, &normalized_content, norm_pos);
+                let original_pos =
+                    Self::map_normalized_to_original(content, &normalized_content, norm_pos);
                 return Some((original_pos, original_pos + old_string.len()));
             }
 
@@ -149,10 +164,17 @@ pub mod edit {
 
             // Strategy 7: Try with different line ending styles
             for line_ending in &["\n", "\r\n", "\r"] {
-                let content_with_le = content.replace("\r\n", "\n").replace("\r", "\n").replace("\n", line_ending);
-                let old_with_le = old_string.replace("\r\n", "\n").replace("\r", "\n").replace("\n", line_ending);
+                let content_with_le = content
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n")
+                    .replace("\n", line_ending);
+                let old_with_le = old_string
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n")
+                    .replace("\n", line_ending);
                 if let Some(pos) = content_with_le.find(&old_with_le) {
-                    let original_pos = Self::map_normalized_to_original(content, &content_with_le, pos);
+                    let original_pos =
+                        Self::map_normalized_to_original(content, &content_with_le, pos);
                     return Some((original_pos, original_pos + old_string.len()));
                 }
             }
@@ -174,15 +196,15 @@ pub mod edit {
         fn map_normalized_to_original(original: &str, normalized: &str, norm_pos: usize) -> usize {
             // For simple normalizations (line endings, tabs), map character by character
             let mut orig_chars = 0;
-            
+
             let orig_chars_vec: Vec<char> = original.chars().collect();
             let norm_chars_vec: Vec<char> = normalized.chars().collect();
-            
+
             for (i, &norm_ch) in norm_chars_vec.iter().enumerate() {
                 if i >= norm_pos {
                     break;
                 }
-                
+
                 // Find corresponding character in original
                 if orig_chars < orig_chars_vec.len() {
                     let orig_ch = orig_chars_vec[orig_chars];
@@ -203,7 +225,7 @@ pub mod edit {
                     orig_chars += 1;
                 }
             }
-            
+
             // Convert character position to byte position
             let mut byte_pos = 0;
             for (i, (b, _)) in original.char_indices().enumerate() {
@@ -215,20 +237,23 @@ pub mod edit {
             original.len()
         }
 
-        fn find_with_normalized_whitespace(content: &str, old_string: &str) -> Option<(usize, usize)> {
+        fn find_with_normalized_whitespace(
+            content: &str,
+            old_string: &str,
+        ) -> Option<(usize, usize)> {
             // Try to find match by normalizing whitespace (collapse multiple spaces/tabs to single space)
             let content_lines: Vec<&str> = content.lines().collect();
             let old_lines: Vec<&str> = old_string.lines().collect();
-            
+
             if old_lines.is_empty() {
                 return None;
             }
-            
+
             for (line_idx, _line) in content_lines.iter().enumerate() {
                 if line_idx + old_lines.len() > content_lines.len() {
                     break;
                 }
-                
+
                 // Check if lines match with normalized whitespace
                 let mut matches = true;
                 for (i, &old_line) in old_lines.iter().enumerate() {
@@ -238,16 +263,20 @@ pub mod edit {
                         matches = false;
                         break;
                     };
-                    
-                    let norm_content: String = content_line.split_whitespace().collect::<Vec<&str>>().join(" ");
-                    let norm_old: String = old_line.split_whitespace().collect::<Vec<&str>>().join(" ");
-                    
+
+                    let norm_content: String = content_line
+                        .split_whitespace()
+                        .collect::<Vec<&str>>()
+                        .join(" ");
+                    let norm_old: String =
+                        old_line.split_whitespace().collect::<Vec<&str>>().join(" ");
+
                     if norm_content != norm_old {
                         matches = false;
                         break;
                     }
                 }
-                
+
                 if matches {
                     // Find byte position of the start of the matching lines
                     let mut byte_pos = 0;
@@ -260,12 +289,14 @@ pub mod edit {
                         line_count += 1;
                     }
                     // Find the exact match within the line
-                    if let Some(line_pos) = content[byte_pos..].find(old_string.lines().next().unwrap_or("")) {
+                    if let Some(line_pos) =
+                        content[byte_pos..].find(old_string.lines().next().unwrap_or(""))
+                    {
                         return Some((byte_pos + line_pos, byte_pos + line_pos + old_string.len()));
                     }
                 }
             }
-            
+
             None
         }
 
@@ -273,16 +304,16 @@ pub mod edit {
             // Try to find match by trimming leading/trailing whitespace from each line
             let content_lines: Vec<&str> = content.lines().collect();
             let old_lines: Vec<&str> = old_string.lines().collect();
-            
+
             if old_lines.is_empty() {
                 return None;
             }
-            
+
             for (line_idx, _line) in content_lines.iter().enumerate() {
                 if line_idx + old_lines.len() > content_lines.len() {
                     break;
                 }
-                
+
                 let mut matches = true;
                 for (i, &old_line) in old_lines.iter().enumerate() {
                     let content_line = if line_idx + i < content_lines.len() {
@@ -291,13 +322,13 @@ pub mod edit {
                         matches = false;
                         break;
                     };
-                    
+
                     if content_line.trim() != old_line.trim() {
                         matches = false;
                         break;
                     }
                 }
-                
+
                 if matches {
                     // Find byte position
                     let mut byte_pos = 0;
@@ -309,12 +340,14 @@ pub mod edit {
                         }
                         line_count += 1;
                     }
-                    if let Some(line_pos) = content[byte_pos..].find(old_string.lines().next().unwrap_or("")) {
+                    if let Some(line_pos) =
+                        content[byte_pos..].find(old_string.lines().next().unwrap_or(""))
+                    {
                         return Some((byte_pos + line_pos, byte_pos + line_pos + old_string.len()));
                     }
                 }
             }
-            
+
             None
         }
 
@@ -322,11 +355,11 @@ pub mod edit {
             // Remove all whitespace and try to match
             let content_no_ws: Vec<char> = content.chars().filter(|c| !c.is_whitespace()).collect();
             let old_no_ws: Vec<char> = old_string.chars().filter(|c| !c.is_whitespace()).collect();
-            
+
             if old_no_ws.is_empty() || content_no_ws.len() < old_no_ws.len() {
                 return None;
             }
-            
+
             // Try to find the pattern
             for i in 0..=content_no_ws.len() - old_no_ws.len() {
                 if content_no_ws[i..i + old_no_ws.len()] == old_no_ws[..] {
@@ -336,7 +369,7 @@ pub mod edit {
                     return Some((start_pos, end_pos));
                 }
             }
-            
+
             None
         }
 
@@ -353,7 +386,13 @@ pub mod edit {
             text.len()
         }
 
-        fn execute_edit(&self, file_path: &str, old_string: &str, new_string: &str, replace_all: bool) -> Result<String, Box<dyn Error>> {
+        fn execute_edit(
+            &self,
+            file_path: &str,
+            old_string: &str,
+            new_string: &str,
+            replace_all: bool,
+        ) -> Result<String, Box<dyn Error>> {
             // Validate that oldString and newString are different
             if old_string == new_string {
                 return Err("oldString and newString must be different".into());
@@ -376,7 +415,9 @@ pub mod edit {
 
                 loop {
                     let remaining = &modified_content[search_pos..];
-                    if let Some((start, end)) = Self::find_match_with_fallbacks(remaining, old_string) {
+                    if let Some((start, end)) =
+                        Self::find_match_with_fallbacks(remaining, old_string)
+                    {
                         let actual_start = search_pos + start;
                         let actual_end = search_pos + end;
                         modified_content.replace_range(actual_start..actual_end, new_string);
@@ -388,18 +429,26 @@ pub mod edit {
                 }
 
                 if replacements == 0 {
-                    return Err(format!("No matches found for oldString in file: {}", file_path).into());
+                    return Err(
+                        format!("No matches found for oldString in file: {}", file_path).into(),
+                    );
                 }
 
                 fs::write(file_path, &modified_content)?;
-                Ok(format!("Successfully replaced {} occurrence(s) in {}", replacements, file_path))
+                Ok(format!(
+                    "Successfully replaced {} occurrence(s) in {}",
+                    replacements, file_path
+                ))
             } else {
                 // Replace first occurrence only
                 if let Some((start, end)) = Self::find_match_with_fallbacks(&content, old_string) {
                     let mut modified_content = content;
                     modified_content.replace_range(start..end, new_string);
                     fs::write(file_path, &modified_content)?;
-                    Ok(format!("Successfully replaced first occurrence in {}", file_path))
+                    Ok(format!(
+                        "Successfully replaced first occurrence in {}",
+                        file_path
+                    ))
                 } else {
                     Err(format!("No match found for oldString in file: {}", file_path).into())
                 }
@@ -415,22 +464,26 @@ pub mod edit {
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
-            
+
             // Get required parameters
-            let file_path = args.get("filePath")
+            let file_path = args
+                .get("filePath")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: filePath")?;
 
-            let old_string = args.get("oldString")
+            let old_string = args
+                .get("oldString")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: oldString")?;
 
-            let new_string = args.get("newString")
+            let new_string = args
+                .get("newString")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: newString")?;
 
             // Get optional parameter
-            let replace_all = args.get("replaceAll")
+            let replace_all = args
+                .get("replaceAll")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
@@ -443,4 +496,3 @@ pub mod edit {
         }
     }
 }
-

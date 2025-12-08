@@ -10,10 +10,10 @@ use constants::DEFAULT_BASE_URL;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEventKind, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use handlers::{handle_chat_key, handle_welcome_key};
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{error::Error, io::stdout, time::Duration};
 use ui::ui;
 
@@ -22,11 +22,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         let rt = tokio::runtime::Runtime::new()?;
         match parse_agent_type(&agent_str) {
             Ok(agent_type) => {
-                rt.block_on(run_cmd_mode(prompt, agent_type, model, provider, api_key, base_url))?;
+                rt.block_on(run_cmd_mode(
+                    prompt, agent_type, model, provider, api_key, base_url,
+                ))?;
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
-                eprintln!("\nUsage: pengy --prompt \"<prompt>\" --agent <agent-type> --model <model-name> --provider <provider> --api-key <api-key> [--base-url <base-url>]");
+                eprintln!(
+                    "\nUsage: pengy --prompt \"<prompt>\" --agent <agent-type> --model <model-name> --provider <provider> --api-key <api-key> [--base-url <base-url>]"
+                );
                 eprintln!("\nRequired arguments:");
                 eprintln!("  --prompt \"<prompt>\"        The prompt/question for the agent");
                 eprintln!("  --agent <agent-type>        The agent type to use");
@@ -34,7 +38,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 eprintln!("  --provider <provider>       The provider name (e.g., OpenAI, Custom)");
                 eprintln!("  --api-key <api-key>         Your API key");
                 eprintln!("\nOptional arguments:");
-                eprintln!("  --base-url <base-url>       Custom base URL (required for Custom provider)");
+                eprintln!(
+                    "  --base-url <base-url>       Custom base URL (required for Custom provider)"
+                );
                 eprintln!("\nAvailable agent types:");
                 eprintln!("  - coder");
                 eprintln!("  - code-researcher");
@@ -43,7 +49,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 eprintln!("  - control-agent");
                 eprintln!("  - issue-agent");
                 eprintln!("\nExample:");
-                eprintln!("  pengy --prompt \"Write a hello world function\" --agent coder --model openai/gpt-4o --provider OpenAI --api-key sk-...");
+                eprintln!(
+                    "  pengy --prompt \"Write a hello world function\" --agent coder --model openai/gpt-4o --provider OpenAI --api-key sk-..."
+                );
                 std::process::exit(1);
             }
         }
@@ -92,7 +100,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 if let Some(idx) = app.session_list_state.selected() {
                                     if idx < app.sessions.len() {
                                         app.current_session = idx;
-                                        app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
+                                        app.state =
+                                            app.previous_state.clone().unwrap_or(AppState::Welcome);
                                     }
                                 }
                             }
@@ -102,7 +111,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 app.session_list_state.select(Some(i));
                             }
                             KeyCode::Char('k') | KeyCode::Up => {
-                                let i = app.session_list_state.selected().unwrap_or(0).saturating_sub(1);
+                                let i = app
+                                    .session_list_state
+                                    .selected()
+                                    .unwrap_or(0)
+                                    .saturating_sub(1);
                                 app.session_list_state.select(Some(i));
                             }
                             _ => {}
@@ -116,24 +129,36 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     app.model_search_focused = false;
                                     app.search_query.clear();
                                 } else {
-                                    app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
+                                    app.state =
+                                        app.previous_state.clone().unwrap_or(AppState::Welcome);
                                 }
                             }
                             KeyCode::Tab => {
                                 app.model_search_focused = !app.model_search_focused;
                                 if !app.model_search_focused {
                                     let all_models = App::get_available_models();
-                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                        all_models.iter().filter(|m| !m.name.starts_with("Provider:")).collect()
+                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty()
+                                    {
+                                        all_models
+                                            .iter()
+                                            .filter(|m| !m.name.starts_with("Provider:"))
+                                            .collect()
                                     } else {
                                         let query_lower = app.search_query.to_lowercase();
                                         all_models
                                             .iter()
                                             .filter(|m| {
                                                 !m.name.starts_with("Provider:")
-                                                    && (m.name.to_lowercase().contains(&query_lower)
-                                                        || m.provider.to_lowercase().contains(&query_lower)
-                                                        || m.base_url.to_lowercase().contains(&query_lower))
+                                                    && (m
+                                                        .name
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
+                                                        || m.provider
+                                                            .to_lowercase()
+                                                            .contains(&query_lower)
+                                                        || m.base_url
+                                                            .to_lowercase()
+                                                            .contains(&query_lower))
                                             })
                                             .collect()
                                     };
@@ -147,17 +172,28 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     app.model_search_focused = false;
                                 } else {
                                     let models = App::get_available_models();
-                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                        models.iter().filter(|m| !m.name.starts_with("Provider:")).collect()
+                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty()
+                                    {
+                                        models
+                                            .iter()
+                                            .filter(|m| !m.name.starts_with("Provider:"))
+                                            .collect()
                                     } else {
                                         let query_lower = app.search_query.to_lowercase();
                                         models
                                             .iter()
                                             .filter(|m| {
                                                 !m.name.starts_with("Provider:")
-                                                    && (m.name.to_lowercase().contains(&query_lower)
-                                                        || m.provider.to_lowercase().contains(&query_lower)
-                                                        || m.base_url.to_lowercase().contains(&query_lower))
+                                                    && (m
+                                                        .name
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
+                                                        || m.provider
+                                                            .to_lowercase()
+                                                            .contains(&query_lower)
+                                                        || m.base_url
+                                                            .to_lowercase()
+                                                            .contains(&query_lower))
                                             })
                                             .collect()
                                     };
@@ -182,7 +218,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                                                         .selected_model
                                                         .as_ref()
                                                         .map(|m| m.base_url.clone())
-                                                        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+                                                        .unwrap_or_else(|| {
+                                                            DEFAULT_BASE_URL.to_string()
+                                                        });
                                                     app.settings_field = 0;
                                                     app.error = None;
                                                     app.state = AppState::Settings;
@@ -195,7 +233,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                             KeyCode::Up if !app.model_search_focused => {
                                 let all_models = App::get_available_models();
                                 let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                    all_models.iter().filter(|m| !m.name.starts_with("Provider:")).collect()
+                                    all_models
+                                        .iter()
+                                        .filter(|m| !m.name.starts_with("Provider:"))
+                                        .collect()
                                 } else {
                                     let query_lower = app.search_query.to_lowercase();
                                     all_models
@@ -203,18 +244,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         .filter(|m| {
                                             !m.name.starts_with("Provider:")
                                                 && (m.name.to_lowercase().contains(&query_lower)
-                                                    || m.provider.to_lowercase().contains(&query_lower)
-                                                    || m.base_url.to_lowercase().contains(&query_lower))
+                                                    || m.provider
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
+                                                    || m.base_url
+                                                        .to_lowercase()
+                                                        .contains(&query_lower))
                                         })
                                         .collect()
                                 };
-                                let i = app.model_list_state.selected().unwrap_or(0).saturating_sub(1);
-                                app.model_list_state.select(Some(i.min(filtered.len().saturating_sub(1))));
+                                let i = app
+                                    .model_list_state
+                                    .selected()
+                                    .unwrap_or(0)
+                                    .saturating_sub(1);
+                                app.model_list_state
+                                    .select(Some(i.min(filtered.len().saturating_sub(1))));
                             }
                             KeyCode::Down if !app.model_search_focused => {
                                 let all_models = App::get_available_models();
                                 let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                    all_models.iter().filter(|m| !m.name.starts_with("Provider:")).collect()
+                                    all_models
+                                        .iter()
+                                        .filter(|m| !m.name.starts_with("Provider:"))
+                                        .collect()
                                 } else {
                                     let query_lower = app.search_query.to_lowercase();
                                     all_models
@@ -222,8 +275,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         .filter(|m| {
                                             !m.name.starts_with("Provider:")
                                                 && (m.name.to_lowercase().contains(&query_lower)
-                                                    || m.provider.to_lowercase().contains(&query_lower)
-                                                    || m.base_url.to_lowercase().contains(&query_lower))
+                                                    || m.provider
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
+                                                    || m.base_url
+                                                        .to_lowercase()
+                                                        .contains(&query_lower))
                                         })
                                         .collect()
                                 };
@@ -241,8 +298,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         .filter(|m| {
                                             !m.name.starts_with("Provider:")
                                                 && (m.name.to_lowercase().contains(&query_lower)
-                                                    || m.provider.to_lowercase().contains(&query_lower)
-                                                    || m.base_url.to_lowercase().contains(&query_lower))
+                                                    || m.provider
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
+                                                    || m.base_url
+                                                        .to_lowercase()
+                                                        .contains(&query_lower))
                                         })
                                         .collect()
                                 };
@@ -254,7 +315,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 app.search_query.pop();
                                 let all_models = App::get_available_models();
                                 let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
-                                    all_models.iter().filter(|m| !m.name.starts_with("Provider:")).collect()
+                                    all_models
+                                        .iter()
+                                        .filter(|m| !m.name.starts_with("Provider:"))
+                                        .collect()
                                 } else {
                                     let query_lower = app.search_query.to_lowercase();
                                     all_models
@@ -262,8 +326,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         .filter(|m| {
                                             !m.name.starts_with("Provider:")
                                                 && (m.name.to_lowercase().contains(&query_lower)
-                                                    || m.provider.to_lowercase().contains(&query_lower)
-                                                    || m.base_url.to_lowercase().contains(&query_lower))
+                                                    || m.provider
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
+                                                    || m.base_url
+                                                        .to_lowercase()
+                                                        .contains(&query_lower))
                                         })
                                         .collect()
                                 };
@@ -290,7 +358,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                             KeyCode::BackTab => {
                                 let agents = App::get_available_agents();
                                 let current = app.agent_list_state.selected().unwrap_or(0);
-                                let prev = if current == 0 { agents.len() - 1 } else { current - 1 };
+                                let prev = if current == 0 {
+                                    agents.len() - 1
+                                } else {
+                                    current - 1
+                                };
                                 app.agent_list_state.select(Some(prev));
                                 app.selected_agent = agents[prev].2;
                             }
@@ -298,18 +370,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 let agents = App::get_available_agents();
                                 if let Some(selected) = app.agent_list_state.selected() {
                                     app.selected_agent = agents[selected].2;
-                                    app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
+                                    app.state =
+                                        app.previous_state.clone().unwrap_or(AppState::Welcome);
                                 }
                             }
                             KeyCode::Up => {
-                                let i = app.agent_list_state.selected().unwrap_or(0).saturating_sub(1);
+                                let i = app
+                                    .agent_list_state
+                                    .selected()
+                                    .unwrap_or(0)
+                                    .saturating_sub(1);
                                 app.agent_list_state.select(Some(i));
                                 let agents = App::get_available_agents();
                                 app.selected_agent = agents[i].2;
                             }
                             KeyCode::Down => {
                                 let agents = App::get_available_agents();
-                                let i = (app.agent_list_state.selected().unwrap_or(0) + 1).min(agents.len() - 1);
+                                let i = (app.agent_list_state.selected().unwrap_or(0) + 1)
+                                    .min(agents.len() - 1);
                                 app.agent_list_state.select(Some(i));
                                 app.selected_agent = agents[i].2;
                             }
@@ -319,7 +397,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     AppState::Settings => {
                         match key.code {
-                            KeyCode::Esc => app.state = app.previous_state.clone().unwrap_or(AppState::Welcome),
+                            KeyCode::Esc => {
+                                app.state = app.previous_state.clone().unwrap_or(AppState::Welcome)
+                            }
                             KeyCode::Tab => {
                                 app.settings_field = (app.settings_field + 1) % 3;
                             }
@@ -328,7 +408,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                             KeyCode::Up => {
                                 if app.settings_field == 2 {
-                                    let i = app.model_list_state.selected().unwrap_or(0).saturating_sub(1);
+                                    let i = app
+                                        .model_list_state
+                                        .selected()
+                                        .unwrap_or(0)
+                                        .saturating_sub(1);
                                     app.model_list_state.select(Some(i));
                                 }
                             }
@@ -342,7 +426,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                             KeyCode::Enter => {
                                 app.api_key = app.settings_api_key.clone();
                                 let normalized_base_url = {
-                                    let normalized = App::normalize_base_url(&app.settings_base_url);
+                                    let normalized =
+                                        App::normalize_base_url(&app.settings_base_url);
                                     if normalized.is_empty() {
                                         DEFAULT_BASE_URL.to_string()
                                     } else {
@@ -352,8 +437,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 app.settings_base_url = normalized_base_url.clone();
 
                                 let models = App::get_available_models();
-                                let selected_idx =
-                                    app.model_list_state.selected().unwrap_or(0).min(models.len().saturating_sub(1));
+                                let selected_idx = app
+                                    .model_list_state
+                                    .selected()
+                                    .unwrap_or(0)
+                                    .min(models.len().saturating_sub(1));
                                 let mut model = models[selected_idx].clone();
 
                                 if model.provider != "Custom" {
@@ -401,7 +489,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     app.model_search_focused = false;
                                     app.search_query.clear();
                                 } else {
-                                    app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
+                                    app.state =
+                                        app.previous_state.clone().unwrap_or(AppState::Welcome);
                                 }
                             }
                             KeyCode::Tab => {
@@ -412,7 +501,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         .iter()
                                         .filter(|m| m.name.starts_with("Provider:"))
                                         .collect();
-                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty()
+                                    {
                                         provider_models.iter().copied().collect()
                                     } else {
                                         let query_lower = app.search_query.to_lowercase();
@@ -420,8 +510,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                                             .iter()
                                             .filter(|m| {
                                                 m.name.to_lowercase().contains(&query_lower)
-                                                    || m.provider.to_lowercase().contains(&query_lower)
-                                                    || m.base_url.to_lowercase().contains(&query_lower)
+                                                    || m.provider
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
+                                                    || m.base_url
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
                                             })
                                             .copied()
                                             .collect()
@@ -436,9 +530,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     app.model_search_focused = false;
                                 } else {
                                     let all_models = App::get_available_models();
-                                    let provider_models: Vec<&ModelOption> =
-                                        all_models.iter().filter(|m| m.name.starts_with("Provider:")).collect();
-                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty() {
+                                    let provider_models: Vec<&ModelOption> = all_models
+                                        .iter()
+                                        .filter(|m| m.name.starts_with("Provider:"))
+                                        .collect();
+                                    let filtered: Vec<&ModelOption> = if app.search_query.is_empty()
+                                    {
                                         provider_models.iter().copied().collect()
                                     } else {
                                         let query_lower = app.search_query.to_lowercase();
@@ -446,8 +543,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                                             .iter()
                                             .filter(|m| {
                                                 m.name.to_lowercase().contains(&query_lower)
-                                                    || m.provider.to_lowercase().contains(&query_lower)
-                                                    || m.base_url.to_lowercase().contains(&query_lower)
+                                                    || m.provider
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
+                                                    || m.base_url
+                                                        .to_lowercase()
+                                                        .contains(&query_lower)
                                             })
                                             .copied()
                                             .collect()
@@ -490,8 +591,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         .copied()
                                         .collect()
                                 };
-                                let i = app.model_list_state.selected().unwrap_or(0).saturating_sub(1);
-                                app.model_list_state.select(Some(i.min(filtered.len().saturating_sub(1))));
+                                let i = app
+                                    .model_list_state
+                                    .selected()
+                                    .unwrap_or(0)
+                                    .saturating_sub(1);
+                                app.model_list_state
+                                    .select(Some(i.min(filtered.len().saturating_sub(1))));
                             }
                             KeyCode::Down if !app.model_search_focused => {
                                 let all_models = App::get_available_models();
@@ -513,8 +619,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         .copied()
                                         .collect()
                                 };
-                                let i =
-                                    (app.model_list_state.selected().unwrap_or(0) + 1).min(filtered.len().saturating_sub(1));
+                                let i = (app.model_list_state.selected().unwrap_or(0) + 1)
+                                    .min(filtered.len().saturating_sub(1));
                                 app.model_list_state.select(Some(i));
                             }
                             KeyCode::Char(c) if app.model_search_focused => {
@@ -572,10 +678,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     AppState::CustomModel => {
                         match key.code {
                             KeyCode::Esc => app.state = AppState::ModelSelector,
-                            KeyCode::Tab => app.custom_model_field = (app.custom_model_field + 1) % 2,
+                            KeyCode::Tab => {
+                                app.custom_model_field = (app.custom_model_field + 1) % 2
+                            }
                             KeyCode::Enter => {
-                                if !app.custom_model_name.is_empty() && !app.custom_base_url.is_empty() {
-                                    let normalized_base_url = App::normalize_base_url(&app.custom_base_url);
+                                if !app.custom_model_name.is_empty()
+                                    && !app.custom_base_url.is_empty()
+                                {
+                                    let normalized_base_url =
+                                        App::normalize_base_url(&app.custom_base_url);
                                     app.custom_base_url = normalized_base_url.clone();
                                     app.selected_model = Some(ModelOption {
                                         name: app.custom_model_name.clone(),
@@ -589,7 +700,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     } else {
                                         match app.initialize_model() {
                                             Ok(_) => app.state = AppState::Chat,
-                                            Err(e) => app.error = Some(format!("Error initializing: {}", e)),
+                                            Err(e) => {
+                                                app.error =
+                                                    Some(format!("Error initializing: {}", e))
+                                            }
                                         }
                                     }
                                 }
@@ -628,8 +742,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }
-

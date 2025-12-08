@@ -1,10 +1,10 @@
 pub mod docs_reader {
+    use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
+    use serde_json;
     use std::collections::HashMap;
+    use std::error::Error;
     use std::path::PathBuf;
     use std::process::Command;
-    use serde_json;
-    use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
 
     pub struct DocsReaderTool {
         tool: Tool,
@@ -13,15 +13,20 @@ pub mod docs_reader {
     impl DocsReaderTool {
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
-            
+
             // file_name parameter (required)
             let mut file_name_items = HashMap::new();
             file_name_items.insert("type".to_string(), "string".to_string());
-            parameters.insert("file_name".to_string(), Parameter {
-                items: file_name_items,
-                description: "The path to the PDF file to read. Can be a relative or absolute path.".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "file_name".to_string(),
+                Parameter {
+                    items: file_name_items,
+                    description:
+                        "The path to the PDF file to read. Can be a relative or absolute path."
+                            .to_string(),
+                    enum_values: None,
+                },
+            );
 
             // limit_type parameter (optional)
             let mut limit_type_items = HashMap::new();
@@ -48,9 +53,7 @@ pub mod docs_reader {
                 required: vec!["file_name".to_string()],
             };
 
-            Self {
-                tool,
-            }
+            Self { tool }
         }
 
         fn convert_pdf_to_text(&self, file_path: &PathBuf) -> Result<String, Box<dyn Error>> {
@@ -112,13 +115,17 @@ pub mod docs_reader {
             }
         }
 
-        fn read_pdf(&self, file_name: &str, limit_type: Option<&str>, limit: Option<usize>) -> Result<String, Box<dyn Error>> {
+        fn read_pdf(
+            &self,
+            file_name: &str,
+            limit_type: Option<&str>,
+            limit: Option<usize>,
+        ) -> Result<String, Box<dyn Error>> {
             // Resolve file path
             let file_path = if PathBuf::from(file_name).is_absolute() {
                 PathBuf::from(file_name)
             } else {
-                std::env::current_dir()?
-                    .join(file_name)
+                std::env::current_dir()?.join(file_name)
             };
 
             // Check if file exists
@@ -129,10 +136,18 @@ pub mod docs_reader {
             // Check if it's a PDF file
             if let Some(ext) = file_path.extension() {
                 if ext.to_string_lossy().to_lowercase() != "pdf" {
-                    return Err(format!("File '{}' is not a PDF file (extension: {:?})", file_name, ext).into());
+                    return Err(format!(
+                        "File '{}' is not a PDF file (extension: {:?})",
+                        file_name, ext
+                    )
+                    .into());
                 }
             } else {
-                return Err(format!("File '{}' has no extension. Please specify a PDF file.", file_name).into());
+                return Err(format!(
+                    "File '{}' has no extension. Please specify a PDF file.",
+                    file_name
+                )
+                .into());
             }
 
             // Convert PDF to text
@@ -153,9 +168,15 @@ pub mod docs_reader {
 
             let mut result = limited_text;
             if limit_type == "lines" && returned_lines < total_lines {
-                result.push_str(&format!("\n\n[Note: Document truncated from {} lines to {} lines]", total_lines, returned_lines));
+                result.push_str(&format!(
+                    "\n\n[Note: Document truncated from {} lines to {} lines]",
+                    total_lines, returned_lines
+                ));
             } else if limit_type == "words" && returned_words < total_words {
-                result.push_str(&format!("\n\n[Note: Document truncated from {} words to {} words]", total_words, returned_words));
+                result.push_str(&format!(
+                    "\n\n[Note: Document truncated from {} words to {} words]",
+                    total_words, returned_words
+                ));
             }
 
             Ok(result)
@@ -170,18 +191,19 @@ pub mod docs_reader {
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
-            
+
             // Get required file_name parameter
-            let file_name = args.get("file_name")
+            let file_name = args
+                .get("file_name")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: file_name")?;
 
             // Get optional limit_type parameter
-            let limit_type = args.get("limit_type")
-                .and_then(|v| v.as_str());
+            let limit_type = args.get("limit_type").and_then(|v| v.as_str());
 
             // Get optional limit parameter
-            let limit = args.get("limit")
+            let limit = args
+                .get("limit")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
 
@@ -193,4 +215,3 @@ pub mod docs_reader {
         }
     }
 }
-

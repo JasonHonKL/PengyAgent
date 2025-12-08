@@ -1,8 +1,8 @@
 pub mod end {
-    use std::collections::HashMap;
+    use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
+    use std::collections::HashMap;
     use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
 
     /// Tool that allows the agent to end the current run early.
     /// Returns a sentinel string that the agent loop interprets as a final response.
@@ -16,11 +16,16 @@ pub mod end {
 
             let mut reason_items = HashMap::new();
             reason_items.insert("type".to_string(), "string".to_string());
-            parameters.insert("reason".to_string(), Parameter {
-                items: reason_items,
-                description: "Optional short reason for ending early. This will be echoed to the user.".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "reason".to_string(),
+                Parameter {
+                    items: reason_items,
+                    description:
+                        "Optional short reason for ending early. This will be echoed to the user."
+                            .to_string(),
+                    enum_values: None,
+                },
+            );
 
             let tool = Tool {
                 name: "end".to_string(),
@@ -42,7 +47,8 @@ pub mod end {
             // Parse arguments JSON (may be empty or contain an optional reason)
             let args: serde_json::Value = serde_json::from_str(arguments)?;
 
-            let reason = args.get("reason")
+            let reason = args
+                .get("reason")
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
@@ -62,7 +68,3 @@ pub mod end {
         }
     }
 }
-
-
-
-

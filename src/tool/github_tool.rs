@@ -1,9 +1,9 @@
 pub mod github_tool {
-    use std::collections::HashMap;
-    use serde_json;
-    use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
+    use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use crate::util::github_control::github_control;
+    use serde_json;
+    use std::collections::HashMap;
+    use std::error::Error;
 
     pub struct GithubTool {
         tool: Tool,
@@ -12,7 +12,7 @@ pub mod github_tool {
     impl GithubTool {
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
-            
+
             // action parameter
             let mut action_items = HashMap::new();
             action_items.insert("type".to_string(), "string".to_string());
@@ -32,20 +32,28 @@ pub mod github_tool {
             // pr_number parameter (for view_pr)
             let mut pr_number_items = HashMap::new();
             pr_number_items.insert("type".to_string(), "number".to_string());
-            parameters.insert("pr_number".to_string(), Parameter {
-                items: pr_number_items,
-                description: "The PR number to view. Required for 'view_pr' action.".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "pr_number".to_string(),
+                Parameter {
+                    items: pr_number_items,
+                    description: "The PR number to view. Required for 'view_pr' action."
+                        .to_string(),
+                    enum_values: None,
+                },
+            );
 
             // issue_number parameter (for view_issue)
             let mut issue_number_items = HashMap::new();
             issue_number_items.insert("type".to_string(), "number".to_string());
-            parameters.insert("issue_number".to_string(), Parameter {
-                items: issue_number_items,
-                description: "The issue number to view. Required for 'view_issue' action.".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "issue_number".to_string(),
+                Parameter {
+                    items: issue_number_items,
+                    description: "The issue number to view. Required for 'view_issue' action."
+                        .to_string(),
+                    enum_values: None,
+                },
+            );
 
             // state parameter (for list_prs and list_issues)
             let mut state_items = HashMap::new();
@@ -148,15 +156,15 @@ pub mod github_tool {
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
-            
+
             // Get the action
-            let action = args.get("action")
+            let action = args
+                .get("action")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: action")?;
 
             // Get optional repo parameter
-            let repo = args.get("repo")
-                .and_then(|v| v.as_str());
+            let repo = args.get("repo").and_then(|v| v.as_str());
 
             // Route to appropriate handler based on action
             match action {
@@ -164,7 +172,7 @@ pub mod github_tool {
                     let pr_number = args.get("pr_number")
                         .and_then(|v| v.as_u64())
                         .ok_or("Missing required parameter: pr_number (required for view_pr action)")?;
-                    
+
                     match github_control::view_pr(pr_number, repo) {
                         Ok(result) => Ok(result),
                         Err(e) => Err(format!("Failed to view PR: {}", e).into()),
@@ -255,7 +263,3 @@ pub mod github_tool {
         }
     }
 }
-
-
-
-

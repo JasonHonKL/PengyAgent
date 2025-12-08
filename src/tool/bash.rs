@@ -1,11 +1,11 @@
 pub mod bash {
-    use std::collections::HashMap;
-    use std::process::Command;
-    use std::sync::{Mutex, Arc};
-    use std::path::PathBuf;
+    use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
+    use std::collections::HashMap;
     use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::{Arc, Mutex};
 
     pub struct BashTool {
         tool: Tool,
@@ -20,7 +20,7 @@ pub mod bash {
     impl BashTool {
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
-            
+
             // restart parameter
             let mut restart_items = HashMap::new();
             restart_items.insert("type".to_string(), "boolean".to_string());
@@ -73,34 +73,37 @@ pub mod bash {
 
         fn execute_command(&self, cmd: &str) -> Result<String, Box<dyn Error>> {
             let state_guard = self.state.lock().unwrap();
-            
+
             // Build the command with state preservation
             let mut full_cmd = String::new();
-            
+
             // Set environment variables if any
             for (key, value) in &state_guard.env_vars {
-                full_cmd.push_str(&format!("export {}='{}'; ", key, value.replace('\'', "'\\''")));
+                full_cmd.push_str(&format!(
+                    "export {}='{}'; ",
+                    key,
+                    value.replace('\'', "'\\''")
+                ));
             }
-            
+
             // Change to working directory if set
             if let Some(ref wd) = state_guard.working_dir {
                 full_cmd.push_str(&format!("cd '{}' && ", wd.display()));
             }
-            
+
             // Add the actual command
             full_cmd.push_str(cmd);
-            
+
             // Capture the new working directory after command execution
             full_cmd.push_str(" && pwd > /tmp/bash_tool_pwd_$$");
-            
+
             // Execute the command
-            let output = Command::new("bash")
-                .arg("-c")
-                .arg(&full_cmd)
-                .output()?;
+            let output = Command::new("bash").arg("-c").arg(&full_cmd).output()?;
 
             // Update state with new working directory
-            if let Ok(pwd_content) = std::fs::read_to_string(format!("/tmp/bash_tool_pwd_{}", std::process::id())) {
+            if let Ok(pwd_content) =
+                std::fs::read_to_string(format!("/tmp/bash_tool_pwd_{}", std::process::id()))
+            {
                 let pwd_path = PathBuf::from(pwd_content.trim());
                 drop(state_guard);
                 let mut state_guard = self.state.lock().unwrap();
@@ -111,7 +114,7 @@ pub mod bash {
             // Combine stdout and stderr
             let mut result = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            
+
             if !stderr.trim().is_empty() {
                 if !result.is_empty() {
                     result.push_str("\nSTDERR:\n");
@@ -121,8 +124,12 @@ pub mod bash {
 
             // Check exit status
             if !output.status.success() {
-                return Err(format!("Command failed with exit code {}: {}", 
-                    output.status.code().unwrap_or(-1), result).into());
+                return Err(format!(
+                    "Command failed with exit code {}: {}",
+                    output.status.code().unwrap_or(-1),
+                    result
+                )
+                .into());
             }
 
             Ok(result.trim().to_string())
@@ -137,14 +144,16 @@ pub mod bash {
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
-            
+
             // Check if restart is requested
-            let restart = args.get("restart")
+            let restart = args
+                .get("restart")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
             // Get the command
-            let cmd = args.get("cmd")
+            let cmd = args
+                .get("cmd")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: cmd")?;
 
@@ -169,7 +178,7 @@ pub mod bash {
                             Ok(output)
                         }
                     }
-                    Err(e) => Err(format!("Failed to execute command: {}", e).into())
+                    Err(e) => Err(format!("Failed to execute command: {}", e).into()),
                 }
             } else {
                 // Continue immediately - execute in background
@@ -177,8 +186,10 @@ pub mod bash {
                 // In a real implementation, this would spawn a background process
                 // For simplicity, we'll execute it but indicate we're not waiting
                 match self.execute_command(cmd) {
-                    Ok(_) => Ok("Command started (continuing without waiting for completion)".to_string()),
-                    Err(e) => Err(format!("Failed to start command: {}", e).into())
+                    Ok(_) => Ok(
+                        "Command started (continuing without waiting for completion)".to_string(),
+                    ),
+                    Err(e) => Err(format!("Failed to start command: {}", e).into()),
                 }
             }
         }
@@ -188,4 +199,3 @@ pub mod bash {
         }
     }
 }
-

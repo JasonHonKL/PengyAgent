@@ -449,7 +449,10 @@ impl App {
             ("/models", "select model"),
             ("/agents", "select agent"),
             ("/settings", "configure API key / model / base URL"),
-            ("/baseurl", "select provider base URL (required for custom models)"),
+            (
+                "/baseurl",
+                "select provider base URL (required for custom models)",
+            ),
             ("/help", "show help"),
             ("/clear", "clear conversation and reset agent"),
         ]
@@ -587,7 +590,8 @@ impl App {
         self.chat_input.clear();
         self.input_cursor = 0;
 
-        self.chat_messages.push(ChatMessage::User(user_input.clone()));
+        self.chat_messages
+            .push(ChatMessage::User(user_input.clone()));
         self.loading = true;
         self.error = None;
         self.user_scrolled = false;
@@ -596,6 +600,25 @@ impl App {
 
         let model_option = self.selected_model.clone();
         let api_key = self.api_key.clone();
+
+        // Build a lightweight conversation history for Pengy (last 20 user/assistant messages)
+        let conversation_history = {
+            let mut entries = Vec::new();
+            let take_n = 20;
+            let start = self.chat_messages.len().saturating_sub(take_n);
+            for msg in self.chat_messages.iter().skip(start) {
+                match msg {
+                    ChatMessage::User(text) => entries.push(format!("User: {}", text)),
+                    ChatMessage::Assistant(text) => entries.push(format!("Assistant: {}", text)),
+                    _ => {}
+                }
+            }
+            if entries.is_empty() {
+                None
+            } else {
+                Some(entries.join("\n"))
+            }
+        };
 
         match self.selected_agent {
             AgentType::PengyAgent => {
@@ -617,6 +640,7 @@ impl App {
                         base_url,
                         Some("openai/text-embedding-3-small".to_string()),
                         user_input,
+                        conversation_history,
                         Some(3),
                         Some(50),
                         callback,
@@ -671,8 +695,10 @@ impl App {
             match event {
                 AgentEvent::Step { .. } => {}
                 AgentEvent::ToolCall { tool_name, args } => {
-                    let tool_id =
-                        format!("tool_{}", self.chat_messages.len() + self.pending_tool_calls.len());
+                    let tool_id = format!(
+                        "tool_{}",
+                        self.chat_messages.len() + self.pending_tool_calls.len()
+                    );
                     self.pending_tool_calls.push((tool_id, tool_name, args));
                 }
                 AgentEvent::ToolResult { result } => {
@@ -727,11 +753,16 @@ impl App {
                 }
                 AgentEvent::Error { error } => {
                     self.chat_messages.push(ChatMessage::Error(error.clone()));
-                    if let Some(ChatMessage::ToolCall { status, .. }) = self
-                        .chat_messages
-                        .iter_mut()
-                        .rev()
-                        .find(|m| matches!(m, ChatMessage::ToolCall { status: ToolStatus::Running, .. }))
+                    if let Some(ChatMessage::ToolCall { status, .. }) =
+                        self.chat_messages.iter_mut().rev().find(|m| {
+                            matches!(
+                                m,
+                                ChatMessage::ToolCall {
+                                    status: ToolStatus::Running,
+                                    ..
+                                }
+                            )
+                        })
                     {
                         *status = ToolStatus::Error;
                     }
@@ -745,4 +776,3 @@ impl App {
         }
     }
 }
-

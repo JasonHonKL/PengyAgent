@@ -1,6 +1,6 @@
 pub mod simple_agent {
-    use crate::model::model::model::Model;
     use crate::agent::agent::agent::Agent;
+    use crate::model::model::model::Model;
     use crate::tool::bash::bash::BashTool;
     use crate::tool::end::end::EndTool;
     use crate::tool::tool::tool::ToolCall;
@@ -8,7 +8,7 @@ pub mod simple_agent {
     /// Creates a simple agent with the following tools:
     /// - bash: Execute bash commands in a persistent shell session
     /// - end: End the current agent run early with an optional reason
-    /// 
+    ///
     /// This is a minimal agent with only essential tools for basic tasks.
     pub fn create_simple_agent(
         model: Model,
@@ -21,10 +21,7 @@ pub mod simple_agent {
         let end_tool = EndTool::new();
 
         // Convert tools to Box<dyn ToolCall>
-        let tools: Vec<Box<dyn ToolCall>> = vec![
-            Box::new(bash_tool),
-            Box::new(end_tool),
-        ];
+        let tools: Vec<Box<dyn ToolCall>> = vec![Box::new(bash_tool), Box::new(end_tool)];
 
         // Get current working directory for system prompt
         let current_dir = std::env::current_dir()
@@ -48,14 +45,6 @@ Keep your responses concise and focused on the task at hand.",
 
         let final_system_prompt = system_prompt.unwrap_or(default_system_prompt);
 
-        Agent::new(
-            model,
-            tools,
-            final_system_prompt,
-            max_retry,
-            max_step,
-        )
+        Agent::new(model, tools, final_system_prompt, max_retry, max_step)
     }
 }
-
-

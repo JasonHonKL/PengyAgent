@@ -1,9 +1,9 @@
 pub mod pengy_agent {
-    use crate::model::model::model::{Model, Message, Role};
+    use crate::agent::agent::agent::AgentEvent;
     use crate::agent::code_researcher::code_researcher::create_code_researcher_agent;
     use crate::agent::coder::coder::create_coder_agent;
     use crate::agent::test_agent::test_agent::create_test_agent;
-    use crate::agent::agent::agent::AgentEvent;
+    use crate::model::model::model::{Message, Model, Role};
 
     /// Helper function to extract the final response from an agent's messages
     fn extract_final_response(messages: &[Message]) -> Option<String> {
@@ -20,7 +20,7 @@ pub mod pengy_agent {
     /// 1. Code Researcher - researches the codebase and generates a research report
     /// 2. Coder - implements code based on the research report
     /// 3. Test Agent - tests the implemented code
-    /// 
+    ///
     /// This is a meta-agent that coordinates the full development workflow.
     pub async fn run_pengy_agent<F>(
         model: Model,
@@ -28,6 +28,7 @@ pub mod pengy_agent {
         base_url: String,
         embedding_model: Option<String>,
         user_request: String,
+        conversation_history: Option<String>,
         max_retry: Option<u32>,
         max_step: Option<u32>,
         callback: F,
@@ -35,14 +36,31 @@ pub mod pengy_agent {
     where
         F: Fn(AgentEvent) + Send + Sync + 'static + Clone,
     {
-        callback(AgentEvent::Thinking { content: "=== PENGY AGENT: Starting Orchestration ===".to_string() });
+        callback(AgentEvent::Thinking {
+            content: "=== PENGY AGENT: Starting Orchestration ===".to_string(),
+        });
 
         // Step 1: Run Code Researcher Agent
-        callback(AgentEvent::Thinking { content: "=== PHASE 1: Code Research ===".to_string() });
-        let research_prompt = if user_request.trim().is_empty() {
-            "Research the codebase and generate a comprehensive research report. Analyze the architecture, key components, code patterns, dependencies, and provide recommendations for implementation.".to_string()
-        } else {
-            format!("Research the codebase based on the following request and generate a comprehensive research report: {}\n\nAnalyze the architecture, key components, code patterns, dependencies, and provide recommendations for implementation.", user_request)
+        callback(AgentEvent::Thinking {
+            content: "=== PHASE 1: Code Research ===".to_string(),
+        });
+        let research_prompt = {
+            let mut prompt = if user_request.trim().is_empty() {
+                "Research the codebase and generate a comprehensive research report. Analyze the architecture, key components, code patterns, dependencies, and provide recommendations for implementation.".to_string()
+            } else {
+                format!(
+                    "Research the codebase based on the following user request and generate a comprehensive research report:\n{}\n\nAnalyze the architecture, key components, code patterns, dependencies, and provide recommendations for implementation.",
+                    user_request
+                )
+            };
+
+            if let Some(history) = &conversation_history {
+                prompt.push_str(
+                    "\n\nConversation history (include relevant context in your research):\n",
+                );
+                prompt.push_str(history);
+            }
+            prompt
         };
 
         let mut researcher_agent = create_code_researcher_agent(
@@ -55,26 +73,40 @@ pub mod pengy_agent {
             max_step,
         );
 
-        researcher_agent.run(research_prompt, callback.clone()).await;
+        researcher_agent
+            .run(research_prompt, callback.clone())
+            .await;
 
         // Extract research report
         let research_report = extract_final_response(researcher_agent.get_messages())
             .unwrap_or_else(|| "Research completed but no final report was generated.".to_string());
 
-        callback(AgentEvent::Thinking { content: format!("Research Report Generated:\n{}", research_report) });
+        callback(AgentEvent::Thinking {
+            content: format!("Research Report Generated:\n{}", research_report),
+        });
 
         // Step 2: Run Coder Agent with research report
-        callback(AgentEvent::Thinking { content: "=== PHASE 2: Code Implementation ===".to_string() });
-        let implementation_prompt = if user_request.trim().is_empty() {
-            format!(
-                "Based on the following research report, implement the necessary code:\n\n{}\n\nPlease implement the code according to the recommendations in the research report.",
-                research_report
-            )
-        } else {
-            format!(
-                "Based on the following research report and user request, implement the necessary code:\n\nUser Request: {}\n\nResearch Report:\n{}\n\nPlease implement the code according to the research report and user request.",
-                user_request, research_report
-            )
+        callback(AgentEvent::Thinking {
+            content: "=== PHASE 2: Code Implementation ===".to_string(),
+        });
+        let implementation_prompt = {
+            let mut prompt = if user_request.trim().is_empty() {
+                format!(
+                    "Based on the following research report, implement the necessary code:\n\n{}\n\nPlease implement the code according to the recommendations in the research report.",
+                    research_report
+                )
+            } else {
+                format!(
+                    "Based on the following research report and user request, implement the necessary code:\n\nUser Request: {}\n\nResearch Report:\n{}\n\nPlease implement the code according to the research report and user request.",
+                    user_request, research_report
+                )
+            };
+
+            if let Some(history) = &conversation_history {
+                prompt.push_str("\n\nConversation history (consider relevant prior context):\n");
+                prompt.push_str(history);
+            }
+            prompt
         };
 
         let mut coder_agent = create_coder_agent(
@@ -84,20 +116,34 @@ pub mod pengy_agent {
             max_step,
         );
 
-        coder_agent.run(implementation_prompt, callback.clone()).await;
+        coder_agent
+            .run(implementation_prompt, callback.clone())
+            .await;
 
         // Extract implementation summary
         let implementation_summary = extract_final_response(coder_agent.get_messages())
             .unwrap_or_else(|| "Code implementation completed.".to_string());
 
-        callback(AgentEvent::Thinking { content: format!("Implementation Summary:\n{}", implementation_summary) });
+        callback(AgentEvent::Thinking {
+            content: format!("Implementation Summary:\n{}", implementation_summary),
+        });
 
         // Step 3: Run Test Agent
-        callback(AgentEvent::Thinking { content: "=== PHASE 3: Testing ===".to_string() });
-        let testing_prompt = format!(
-            "Test the code that was just implemented. Based on the research report and implementation, create comprehensive test cases:\n\nResearch Report:\n{}\n\nImplementation Summary:\n{}\n\nPlease create test cases in the test folder (create it if it doesn't exist) and verify that the implemented code works correctly.",
-            research_report, implementation_summary
-        );
+        callback(AgentEvent::Thinking {
+            content: "=== PHASE 3: Testing ===".to_string(),
+        });
+        let testing_prompt = {
+            let mut prompt = format!(
+                "Test the code that was just implemented. Based on the user request, research report, and implementation, create comprehensive test cases:\n\nUser Request:\n{}\n\nResearch Report:\n{}\n\nImplementation Summary:\n{}\n\nPlease create test cases in the test folder (create it if it doesn't exist) and verify that the implemented code works correctly.",
+                user_request, research_report, implementation_summary
+            );
+
+            if let Some(history) = &conversation_history {
+                prompt.push_str("\n\nConversation history (consider relevant prior context):\n");
+                prompt.push_str(history);
+            }
+            prompt
+        };
 
         let mut test_agent = create_test_agent(
             model.clone(),
@@ -112,7 +158,9 @@ pub mod pengy_agent {
         let test_results = extract_final_response(test_agent.get_messages())
             .unwrap_or_else(|| "Testing completed.".to_string());
 
-        callback(AgentEvent::Thinking { content: format!("Test Results:\n{}", test_results) });
+        callback(AgentEvent::Thinking {
+            content: format!("Test Results:\n{}", test_results),
+        });
 
         // Compile final summary
         let final_summary = format!(

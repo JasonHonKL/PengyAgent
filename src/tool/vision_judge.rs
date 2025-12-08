@@ -1,10 +1,10 @@
 pub mod vision_judge {
+    use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
+    use serde_json;
     use std::collections::HashMap;
+    use std::error::Error;
     use std::fs;
     use std::path::Path;
-    use serde_json;
-    use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
 
     pub struct VisionJudgeTool {
         tool: Tool,
@@ -13,15 +13,20 @@ pub mod vision_judge {
     impl VisionJudgeTool {
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
-            
+
             // image_path parameter (optional)
             let mut image_path_items = HashMap::new();
             image_path_items.insert("type".to_string(), "string".to_string());
-            parameters.insert("image_path".to_string(), Parameter {
-                items: image_path_items,
-                description: "Path to an image file to read. If provided, this image will be analyzed.".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "image_path".to_string(),
+                Parameter {
+                    items: image_path_items,
+                    description:
+                        "Path to an image file to read. If provided, this image will be analyzed."
+                            .to_string(),
+                    enum_values: None,
+                },
+            );
 
             // screen_cap parameter (optional boolean)
             let mut screen_cap_items = HashMap::new();
@@ -45,7 +50,7 @@ pub mod vision_judge {
         fn image_to_data_url(image_path: &str) -> Result<String, Box<dyn Error>> {
             // Read the image file
             let image_data = fs::read(image_path)?;
-            
+
             // Determine MIME type from file extension
             let mime_type = Path::new(image_path)
                 .extension()
@@ -58,11 +63,11 @@ pub mod vision_judge {
                     _ => "image/png", // default
                 })
                 .unwrap_or("image/png");
-            
+
             // Encode to base64
             use base64::Engine;
             let base64_data = base64::engine::general_purpose::STANDARD.encode(&image_data);
-            
+
             // Return as data URL
             Ok(format!("data:{};base64,{}", mime_type, base64_data))
         }
@@ -70,27 +75,31 @@ pub mod vision_judge {
         fn capture_screenshot() -> Result<String, Box<dyn Error>> {
             // Use screenshots crate to capture screen
             let screens = screenshots::Screen::all()?;
-            
+
             if screens.is_empty() {
                 return Err("No screens available".into());
             }
-            
+
             // Capture the first screen
             let screen = screens[0];
             let image = screen.capture()?;
-            
+
             // Use the to_png() method to get PNG bytes directly
             let png_bytes = image.to_png(None)?;
-            
+
             // Encode to base64
             use base64::Engine;
             let base64_data = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
-            
+
             // Return as data URL
             Ok(format!("data:image/png;base64,{}", base64_data))
         }
 
-        fn execute_vision_judge(&self, image_path: Option<&str>, screen_cap: bool) -> Result<String, Box<dyn Error>> {
+        fn execute_vision_judge(
+            &self,
+            image_path: Option<&str>,
+            screen_cap: bool,
+        ) -> Result<String, Box<dyn Error>> {
             let data_url = if screen_cap {
                 // Capture screenshot
                 Self::capture_screenshot()?
@@ -103,7 +112,7 @@ pub mod vision_judge {
             } else {
                 return Err("Either image_path or screen_cap must be provided".into());
             };
-            
+
             // Return the data URL so it can be used in the next vision completion call
             Ok(data_url)
         }
@@ -117,19 +126,19 @@ pub mod vision_judge {
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
-            
-            // Get optional parameters
-            let image_path = args.get("image_path")
-                .and_then(|v| v.as_str());
 
-            let screen_cap = args.get("screen_cap")
+            // Get optional parameters
+            let image_path = args.get("image_path").and_then(|v| v.as_str());
+
+            let screen_cap = args
+                .get("screen_cap")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
             // Execute the vision judge (screenshots is sync, so we can call directly)
             match self.execute_vision_judge(image_path, screen_cap) {
                 Ok(result) => Ok(result),
-                Err(e) => Err(format!("Failed to execute vision_judge: {}", e).into())
+                Err(e) => Err(format!("Failed to execute vision_judge: {}", e).into()),
             }
         }
 
@@ -138,4 +147,3 @@ pub mod vision_judge {
         }
     }
 }
-

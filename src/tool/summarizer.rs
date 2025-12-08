@@ -1,8 +1,8 @@
 pub mod summarizer {
-    use std::collections::HashMap;
+    use crate::tool::tool::tool::{Tool, ToolCall};
     use serde_json;
+    use std::collections::HashMap;
     use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool};
 
     pub struct SummarizerTool {
         tool: Tool,
@@ -29,7 +29,7 @@ pub mod summarizer {
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments - should be empty or {}
             let _args: serde_json::Value = serde_json::from_str(arguments)?;
-            
+
             // This tool returns a special marker that indicates summarization should happen
             // The actual summarization logic will be handled in the agent
             Ok("SUMMARIZE_CONVERSATION".to_string())
@@ -40,4 +40,3 @@ pub mod summarizer {
         }
     }
 }
-

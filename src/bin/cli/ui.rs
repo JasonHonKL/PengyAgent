@@ -1,14 +1,33 @@
 use crate::app::{App, AppState, ChatMessage, ModelOption, ToolStatus};
 use crate::constants::{DEFAULT_BASE_URL, VERSION};
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, Wrap,
     },
-    Frame,
 };
+
+fn wrap_to_width(text: &str, max: usize) -> Vec<String> {
+    if text.len() <= max {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        current.push(ch);
+        if current.len() >= max {
+            lines.push(current);
+            current = String::new();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
 
 pub(crate) fn ui(f: &mut Frame, app: &mut App) {
     let layout = Layout::default()
@@ -123,8 +142,11 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                         ]));
                     }
                     if let Some(desc) = desc {
-                        let truncated =
-                            if desc.len() > 60 { format!("{}...", &desc[..60]) } else { desc };
+                        let truncated = if desc.len() > 60 {
+                            format!("{}...", &desc[..60])
+                        } else {
+                            desc
+                        };
                         result.push(Line::from(vec![
                             Span::styled("  Task: ", Style::default().fg(Color::Gray)),
                             Span::styled(truncated, Style::default().fg(Color::White)),
@@ -155,8 +177,10 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                         Span::styled(file_path.clone(), Style::default().fg(Color::White)),
                     ]));
 
-                    let old_lines: Vec<String> = old_string.lines().map(|s| s.to_string()).collect();
-                    let new_lines: Vec<String> = new_string.lines().map(|s| s.to_string()).collect();
+                    let old_lines: Vec<String> =
+                        old_string.lines().map(|s| s.to_string()).collect();
+                    let new_lines: Vec<String> =
+                        new_string.lines().map(|s| s.to_string()).collect();
 
                     let max_lines = old_lines.len().max(new_lines.len());
                     let max_display_lines = 25.min(max_lines);
@@ -173,15 +197,21 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                     };
 
                     for idx in 0..max_display_lines {
-                        let old_line_owned =
-                            old_lines.get(idx).cloned().unwrap_or_else(|| "".to_string());
-                        let new_line_owned =
-                            new_lines.get(idx).cloned().unwrap_or_else(|| "".to_string());
+                        let old_line_owned = old_lines
+                            .get(idx)
+                            .cloned()
+                            .unwrap_or_else(|| "".to_string());
+                        let new_line_owned = new_lines
+                            .get(idx)
+                            .cloned()
+                            .unwrap_or_else(|| "".to_string());
 
                         let line_num = idx + 1;
 
-                        let old_display = truncate_to(&old_line_owned, left_width.saturating_sub(6));
-                        let new_display = truncate_to(&new_line_owned, right_width.saturating_sub(6));
+                        let old_display =
+                            truncate_to(&old_line_owned, left_width.saturating_sub(6));
+                        let new_display =
+                            truncate_to(&new_line_owned, right_width.saturating_sub(6));
 
                         let left_col = format!("{:>4} {}", line_num, old_display);
                         let right_col = format!("{:>4} {}", line_num, new_display);
@@ -193,9 +223,7 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                             result.push(Line::from(vec![
                                 Span::styled(
                                     padded_left.clone(),
-                                    Style::default()
-                                        .fg(Color::White)
-                                        .bg(Color::Rgb(40, 20, 20)),
+                                    Style::default().fg(Color::White).bg(Color::Rgb(40, 20, 20)),
                                 ),
                                 Span::styled(" │ ", Style::default().fg(Color::Rgb(60, 60, 60))),
                                 Span::styled(
@@ -226,29 +254,46 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                 }
             }
             "file_manager" => {
-                if let Some(path) = json.get("path").and_then(|v| v.as_str()).map(|s| s.to_string())
+                if let Some(path) = json
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
                 {
                     result.push(Line::from(vec![
                         Span::styled("  Path: ", Style::default().fg(Color::Gray)),
                         Span::styled(path.clone(), Style::default().fg(Color::White)),
                     ]));
-                    if let Some(kind) = json.get("kind").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                    if let Some(kind) = json
+                        .get("kind")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                    {
                         result.push(Line::from(vec![
                             Span::styled("  Kind: ", Style::default().fg(Color::Gray)),
                             Span::styled(kind, Style::default().fg(Color::White)),
                         ]));
                     }
                     if let Some(start) = json.get("startLine").and_then(|v| v.as_u64()) {
-                        let end = json.get("endLine").and_then(|v| v.as_u64()).unwrap_or(start);
+                        let end = json
+                            .get("endLine")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(start);
                         result.push(Line::from(vec![
                             Span::styled("  Range: ", Style::default().fg(Color::Gray)),
-                            Span::styled(format!("{}-{}", start, end), Style::default().fg(Color::White)),
+                            Span::styled(
+                                format!("{}-{}", start, end),
+                                Style::default().fg(Color::White),
+                            ),
                         ]));
                     }
                 }
             }
             "read_file" => {
-                if let Some(path) = json.get("path").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                if let Some(path) = json
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                {
                     result.push(Line::from(vec![
                         Span::styled("  Path: ", Style::default().fg(Color::Gray)),
                         Span::styled(path.clone(), Style::default().fg(Color::White)),
@@ -256,15 +301,20 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                 }
             }
             "grep" => {
-                if let Some(pattern) =
-                    json.get("pattern").and_then(|v| v.as_str()).map(|s| s.to_string())
+                if let Some(pattern) = json
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
                 {
                     result.push(Line::from(vec![
                         Span::styled("  Pattern: ", Style::default().fg(Color::Gray)),
                         Span::styled(pattern.clone(), Style::default().fg(Color::White)),
                     ]));
                 }
-                if let Some(path) = json.get("path").and_then(|v| v.as_str()).map(|s| s.to_string())
+                if let Some(path) = json
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
                 {
                     result.push(Line::from(vec![
                         Span::styled("  Path: ", Style::default().fg(Color::Gray)),
@@ -273,20 +323,22 @@ fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
                 }
             }
             _ => {
-                result.push(Line::from(Span::styled(
-                    format!("Args: {}", args),
-                    Style::default().fg(Color::Gray),
-                )));
+                for seg in wrap_to_width(&format!("Args: {}", args), 80) {
+                    result.push(Line::from(Span::styled(
+                        seg,
+                        Style::default().fg(Color::Gray),
+                    )));
+                }
             }
         }
 
         return result;
     }
 
-    vec![Line::from(Span::styled(
-        format!("Args: {}", args),
-        Style::default().fg(Color::Gray),
-    ))]
+    wrap_to_width(&format!("Args: {}", args), 80)
+        .into_iter()
+        .map(|seg| Line::from(Span::styled(seg, Style::default().fg(Color::Gray))))
+        .collect()
 }
 
 fn render_tool_call_card(
@@ -315,16 +367,42 @@ fn render_tool_call_card(
     }
 
     if let Some(res) = result {
-        lines.push(Line::from(vec![
-            Span::styled("  Result: ", Style::default().fg(Color::Gray)),
-            Span::styled(res.clone(), Style::default().fg(Color::Green)),
-        ]));
+        // Make bash outputs readable: turn escaped newlines into real newlines.
+        let normalized = res.replace("\\r\\n", "\n").replace("\\n", "\n");
+
+        // Wrap per line to keep columns tidy.
+        let mut wrapped_lines: Vec<String> = Vec::new();
+        for line in normalized.lines() {
+            let segments = wrap_to_width(line, 80);
+            wrapped_lines.extend(segments);
+        }
+
+        if wrapped_lines.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("  Result: ", Style::default().fg(Color::Gray)),
+                Span::styled("", Style::default().fg(Color::Gray)),
+            ]));
+        } else {
+            for (idx, seg) in wrapped_lines.iter().enumerate() {
+                if idx == 0 {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Result: ", Style::default().fg(Color::Gray)),
+                        Span::styled(seg.clone(), Style::default().fg(Color::White)),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled("           ", Style::default().fg(Color::Gray)),
+                        Span::styled(seg.clone(), Style::default().fg(Color::White)),
+                    ]));
+                }
+            }
+        }
     }
 
     let card_bg = match status {
-        ToolStatus::Running => Color::Rgb(50, 50, 50),
-        ToolStatus::Success => Color::Rgb(30, 50, 30),
-        ToolStatus::Error => Color::Rgb(50, 30, 30),
+        ToolStatus::Running => Color::Rgb(32, 32, 32),
+        ToolStatus::Success => Color::Rgb(28, 28, 28), // keep neutral, avoid big green blocks
+        ToolStatus::Error => Color::Rgb(40, 24, 24),
     };
 
     ListItem::new(lines).style(Style::default().bg(card_bg))
@@ -349,11 +427,18 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                 ListItem::new(user_lines)
             }
             ChatMessage::Assistant(content) => {
-                let mut assistant_lines =
-                    vec![Line::from(vec![Span::raw("")]), Line::from(vec![Span::raw("")])];
+                let mut assistant_lines = vec![
+                    Line::from(vec![Span::raw("")]),
+                    Line::from(vec![Span::raw("")]),
+                ];
                 let content_lines: Vec<Line> = content
                     .lines()
-                    .map(|l| Line::from(vec![Span::styled("  ", Style::default()), Span::raw(l.to_string())]))
+                    .map(|l| {
+                        Line::from(vec![
+                            Span::styled("  ", Style::default()),
+                            Span::raw(l.to_string()),
+                        ])
+                    })
                     .collect();
                 assistant_lines.extend(content_lines);
                 assistant_lines.push(Line::from(vec![Span::raw("")]));
@@ -371,15 +456,15 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
                 Span::styled(
                     content.clone(),
-                    Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC),
+                    Style::default()
+                        .fg(Color::Gray)
+                        .add_modifier(Modifier::ITALIC),
                 ),
             ])),
             ChatMessage::Error(err) => ListItem::new(Line::from(vec![
                 Span::styled(
                     "Error: ",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(err.clone(), Style::default().fg(Color::Red)),
             ])),
@@ -420,8 +505,12 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
 fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let state = format!("{:?}", app.state);
     let title = format!(" Pengy Agent {} │ State: {} ", VERSION, state);
-    let header = Paragraph::new(title)
-        .style(Style::default().fg(Color::White).bg(Color::Black).add_modifier(Modifier::BOLD));
+    let header = Paragraph::new(title).style(
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Black)
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_widget(header, area);
 }
 
@@ -523,14 +612,24 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
         .map(|m| m.name.clone())
         .unwrap_or_else(|| "None".to_string());
     let agent_name = format!("{:?}", app.selected_agent);
-    let loading = if app.loading { "● Running" } else { "● Idle" };
+    let loading = if app.loading {
+        "● Running"
+    } else {
+        "● Idle"
+    };
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .to_string_lossy()
         .to_string();
-    let status_text = format!(" {} │ Model: {} │ Agent: {} │ {} ", cwd, model_name, agent_name, loading);
-    let status = Paragraph::new(status_text)
-        .style(Style::default().fg(Color::Rgb(150, 150, 150)).bg(Color::Black));
+    let status_text = format!(
+        " {} │ Model: {} │ Agent: {} │ {} ",
+        cwd, model_name, agent_name, loading
+    );
+    let status = Paragraph::new(status_text).style(
+        Style::default()
+            .fg(Color::Rgb(150, 150, 150))
+            .bg(Color::Black),
+    );
     f.render_widget(status, area);
 }
 
@@ -545,10 +644,15 @@ fn render_chat_panel(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
         "Shortcuts",
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     )));
     for c in commands {
-        lines.push(Line::from(Span::styled(c, Style::default().fg(Color::Gray))));
+        lines.push(Line::from(Span::styled(
+            c,
+            Style::default().fg(Color::Gray),
+        )));
     }
 
     if app.loading {
@@ -578,8 +682,11 @@ fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(area);
 
-    let title = Paragraph::new("Modified Files")
-        .style(Style::default().fg(Color::Rgb(200, 200, 200)).add_modifier(Modifier::BOLD));
+    let title = Paragraph::new("Modified Files").style(
+        Style::default()
+            .fg(Color::Rgb(200, 200, 200))
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_widget(title, vertical[0]);
 
     if !app.modified_files.is_empty() {
@@ -590,11 +697,18 @@ fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
                 .next()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| file_path.clone());
-            let summary = format!("+{} / -{}", added, removed);
             file_items.push(Line::from(vec![
                 Span::styled(file_name, Style::default().fg(Color::White)),
                 Span::raw(" "),
-                Span::styled(summary, Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!("+{}", added),
+                    Style::default().fg(Color::LightGreen),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    format!("-{}", removed),
+                    Style::default().fg(Color::LightRed),
+                ),
             ]));
         }
 
@@ -621,7 +735,10 @@ fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
     ]));
     context_lines.push(Line::from(vec![
         Span::styled("State: ", Style::default().fg(Color::Gray)),
-        Span::styled(format!("{:?}", app.state), Style::default().fg(Color::White)),
+        Span::styled(
+            format!("{:?}", app.state),
+            Style::default().fg(Color::White),
+        ),
     ]));
 
     let context_para = Paragraph::new(context_lines).block(session_block);
@@ -640,10 +757,7 @@ fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(60),
-            Constraint::Percentage(40),
-        ])
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(content_area);
 
     let logo_paragraph = Paragraph::new(app.logo.clone())
@@ -651,11 +765,7 @@ fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
         .style(Style::default().fg(Color::White));
     f.render_widget(logo_paragraph, chunks[0]);
 
-    let info = vec![
-        Line::from("Type your prompt to start chatting."),
-        Line::from("Commands: /models /agents /settings /help /clear /baseurl"),
-        Line::from("Press Enter to start. Esc to quit."),
-    ];
+    let info = vec![Line::from("Type your prompt to start chatting.")];
     let info_block = Block::default()
         .borders(Borders::NONE)
         .title("Getting Started");
@@ -686,7 +796,12 @@ fn render_command_hints(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|(cmd, desc)| {
             ListItem::new(Line::from(vec![
-                Span::styled(*cmd, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    *cmd,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" - "),
                 Span::styled(*desc, Style::default().fg(Color::Gray)),
             ]))
@@ -859,14 +974,12 @@ fn render_model_selector(f: &mut Frame, app: &mut App, area: Rect) {
     let model_block = Block::default()
         .borders(Borders::ALL)
         .title("Models (↑/↓ to select)");
-    let model_list = List::new(items)
-        .block(model_block)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .bg(Color::Rgb(50, 50, 50))
-                .add_modifier(Modifier::BOLD),
-        );
+    let model_list = List::new(items).block(model_block).highlight_style(
+        Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Rgb(50, 50, 50))
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_stateful_widget(model_list, layout[1], &mut app.model_list_state);
 
     let summary = {
@@ -924,14 +1037,12 @@ fn render_agent_selector(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .bg(Color::Rgb(50, 50, 50))
-                .add_modifier(Modifier::BOLD),
-        );
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Rgb(50, 50, 50))
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_stateful_widget(list, rect, &mut app.agent_list_state);
 }
 
@@ -954,11 +1065,13 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
         ])
         .split(inner);
 
-    let api_block = Block::default().borders(Borders::ALL).title(if app.settings_field == 0 {
-        "API Key (active)"
-    } else {
-        "API Key"
-    });
+    let api_block = Block::default()
+        .borders(Borders::ALL)
+        .title(if app.settings_field == 0 {
+            "API Key (active)"
+        } else {
+            "API Key"
+        });
     let masked_key = if app.settings_api_key.is_empty() {
         "<not set>".to_string()
     } else {
@@ -971,7 +1084,10 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
             .chars()
             .rev()
             .collect();
-        let hidden_len = app.settings_api_key.len().saturating_sub(visible_tail.len());
+        let hidden_len = app
+            .settings_api_key
+            .len()
+            .saturating_sub(visible_tail.len());
         format!("{}{}", "*".repeat(hidden_len), visible_tail)
     };
     let api_para = Paragraph::new(masked_key.clone())
@@ -979,11 +1095,13 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
         .wrap(Wrap { trim: true });
     f.render_widget(api_para, layout[0]);
 
-    let url_block = Block::default().borders(Borders::ALL).title(if app.settings_field == 1 {
-        "Base URL (active)"
-    } else {
-        "Base URL"
-    });
+    let url_block = Block::default()
+        .borders(Borders::ALL)
+        .title(if app.settings_field == 1 {
+            "Base URL (active)"
+        } else {
+            "Base URL"
+        });
     let base_url = if app.settings_base_url.is_empty() {
         DEFAULT_BASE_URL.to_string()
     } else {
@@ -1002,10 +1120,9 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
         }
     } else if !models.is_empty() {
         if let Some(ref selected_model) = app.selected_model {
-            if let Some(idx) = models
-                .iter()
-                .position(|m| m.name == selected_model.name && m.provider == selected_model.provider)
-            {
+            if let Some(idx) = models.iter().position(|m| {
+                m.name == selected_model.name && m.provider == selected_model.provider
+            }) {
                 app.model_list_state.select(Some(idx));
             } else {
                 app.model_list_state.select(Some(0));
@@ -1050,14 +1167,12 @@ fn render_settings(f: &mut Frame, app: &mut App, area: Rect) {
     let model_block = Block::default()
         .borders(Borders::ALL)
         .title("Models (↑/↓ to select)");
-    let model_list = List::new(items)
-        .block(model_block)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .bg(Color::Rgb(50, 50, 50))
-                .add_modifier(Modifier::BOLD),
-        );
+    let model_list = List::new(items).block(model_block).highlight_style(
+        Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Rgb(50, 50, 50))
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_stateful_widget(model_list, layout[2], &mut app.model_list_state);
 
     let summary = {
@@ -1126,9 +1241,11 @@ fn render_session_selector(f: &mut Frame, app: &mut App, area: Rect) {
             ListItem::new(format!("{} {}", marker, s))
         })
         .collect();
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_stateful_widget(list, rect, &mut app.session_list_state);
 }
 
@@ -1251,9 +1368,11 @@ fn render_baseurl_selector(f: &mut Frame, app: &mut App, area: Rect) {
         .borders(Borders::ALL)
         .title(format!("Providers ({} found)", filtered_providers.len()));
 
-    let list = List::new(items)
-        .block(provider_block)
-        .highlight_style(Style::default().fg(Color::Yellow).bg(Color::Rgb(50, 50, 50)));
+    let list = List::new(items).block(provider_block).highlight_style(
+        Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Rgb(50, 50, 50)),
+    );
 
     f.render_stateful_widget(list, layout[1], &mut app.model_list_state);
 
@@ -1315,4 +1434,3 @@ fn render_custom_model(f: &mut Frame, app: &mut App, area: Rect) {
     let cursor_y = rect.y + line_offset;
     f.set_cursor_position((cursor_x, cursor_y));
 }
-

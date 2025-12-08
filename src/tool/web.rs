@@ -1,8 +1,8 @@
 pub mod web {
-    use std::collections::HashMap;
+    use crate::tool::tool::tool::{Parameter, Tool, ToolCall};
     use serde_json;
+    use std::collections::HashMap;
     use std::error::Error;
-    use crate::tool::tool::tool::{ToolCall, Tool, Parameter};
 
     pub struct WebTool {
         tool: Tool,
@@ -12,24 +12,30 @@ pub mod web {
     impl WebTool {
         pub fn new() -> Self {
             let mut parameters = HashMap::new();
-            
+
             // url parameter (required)
             let mut url_items = HashMap::new();
             url_items.insert("type".to_string(), "string".to_string());
-            parameters.insert("url".to_string(), Parameter {
-                items: url_items,
-                description: "The URL to fetch. Must be a valid HTTP or HTTPS URL.".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "url".to_string(),
+                Parameter {
+                    items: url_items,
+                    description: "The URL to fetch. Must be a valid HTTP or HTTPS URL.".to_string(),
+                    enum_values: None,
+                },
+            );
 
             // timeout parameter (optional)
             let mut timeout_items = HashMap::new();
             timeout_items.insert("type".to_string(), "number".to_string());
-            parameters.insert("timeout".to_string(), Parameter {
-                items: timeout_items,
-                description: "Request timeout in seconds (default: 30).".to_string(),
-                enum_values: None,
-            });
+            parameters.insert(
+                "timeout".to_string(),
+                Parameter {
+                    items: timeout_items,
+                    description: "Request timeout in seconds (default: 30).".to_string(),
+                    enum_values: None,
+                },
+            );
 
             let tool = Tool {
                 name: "web".to_string(),
@@ -48,15 +54,23 @@ pub mod web {
             Self { tool, client }
         }
 
-        async fn fetch_url(&self, url: &str, timeout_secs: Option<u64>) -> Result<String, Box<dyn Error>> {
+        async fn fetch_url(
+            &self,
+            url: &str,
+            timeout_secs: Option<u64>,
+        ) -> Result<String, Box<dyn Error>> {
             // Validate URL
             if !url.starts_with("http://") && !url.starts_with("https://") {
-                return Err(format!("Invalid URL: {}. URL must start with http:// or https://", url).into());
+                return Err(format!(
+                    "Invalid URL: {}. URL must start with http:// or https://",
+                    url
+                )
+                .into());
             }
 
             // Create request with optional custom timeout
             let mut request = self.client.get(url);
-            
+
             if let Some(timeout) = timeout_secs {
                 request = request.timeout(std::time::Duration::from_secs(timeout));
             }
@@ -66,11 +80,17 @@ pub mod web {
 
             // Check status
             if !response.status().is_success() {
-                return Err(format!("HTTP error: {} - {}", response.status(), response.status().canonical_reason().unwrap_or("Unknown")).into());
+                return Err(format!(
+                    "HTTP error: {} - {}",
+                    response.status(),
+                    response.status().canonical_reason().unwrap_or("Unknown")
+                )
+                .into());
             }
 
             // Get content type
-            let content_type = response.headers()
+            let content_type = response
+                .headers()
                 .get("content-type")
                 .and_then(|h| h.to_str().ok())
                 .unwrap_or("text/html")
@@ -95,7 +115,7 @@ pub mod web {
             let mut in_script = false;
             let mut in_style = false;
             let mut chars = html.chars().peekable();
-            
+
             // Simple state machine to remove script/style tags and extract text
             while let Some(ch) = chars.next() {
                 match ch {
@@ -110,7 +130,7 @@ pub mod web {
                                 tag_name.push(c.to_ascii_lowercase());
                             }
                         }
-                        
+
                         if tag_name == "script" {
                             in_script = true;
                         } else if tag_name == "/script" {
@@ -120,7 +140,7 @@ pub mod web {
                         } else if tag_name == "/style" {
                             in_style = false;
                         }
-                        
+
                         // Skip to closing >
                         while let Some(&next_ch) = chars.peek() {
                             if next_ch == '>' {
@@ -137,9 +157,10 @@ pub mod web {
                     }
                 }
             }
-            
+
             // Decode common HTML entities
-            let text = result.replace("&nbsp;", " ")
+            let text = result
+                .replace("&nbsp;", " ")
                 .replace("&amp;", "&")
                 .replace("&lt;", "<")
                 .replace("&gt;", ">")
@@ -148,7 +169,7 @@ pub mod web {
                 .replace("&apos;", "'")
                 .replace("&mdash;", "—")
                 .replace("&ndash;", "–");
-            
+
             // Normalize whitespace - replace multiple whitespace with single space
             let mut normalized = String::new();
             let mut prev_was_whitespace = false;
@@ -163,7 +184,7 @@ pub mod web {
                     prev_was_whitespace = false;
                 }
             }
-            
+
             // Trim and limit length (prevent huge outputs)
             normalized.trim().chars().take(50000).collect()
         }
@@ -177,25 +198,25 @@ pub mod web {
         fn run(&self, arguments: &str) -> Result<String, Box<dyn Error>> {
             // Parse arguments JSON
             let args: serde_json::Value = serde_json::from_str(arguments)?;
-            
+
             // Get required URL parameter
-            let url = args.get("url")
+            let url = args
+                .get("url")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: url")?;
 
             // Get optional timeout parameter
-            let timeout = args.get("timeout")
-                .and_then(|v| v.as_u64());
+            let timeout = args.get("timeout").and_then(|v| v.as_u64());
 
             // Since reqwest is async, we need to use a runtime
             // Create a new runtime for this call
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| format!("Failed to create async runtime: {}", e))?;
-            
+
             // Execute the async fetch
             match rt.block_on(self.fetch_url(url, timeout)) {
                 Ok(result) => Ok(result),
-                Err(e) => Err(format!("Failed to fetch URL: {}", e).into())
+                Err(e) => Err(format!("Failed to fetch URL: {}", e).into()),
             }
         }
 
@@ -204,4 +225,3 @@ pub mod web {
         }
     }
 }
-

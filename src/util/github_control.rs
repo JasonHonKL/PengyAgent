@@ -1,13 +1,13 @@
 pub mod github_control {
-    use std::process::Command;
     use std::error::Error;
+    use std::process::Command;
 
     /// View details of a specific pull request
-    /// 
+    ///
     /// # Arguments
     /// * `pr_number` - The PR number to view
     /// * `repo` - Optional repository in format "owner/repo". If None, uses current repo
-    /// 
+    ///
     /// # Returns
     /// JSON string containing PR details
     pub fn view_pr(pr_number: u64, repo: Option<&str>) -> Result<String, Box<dyn Error>> {
@@ -24,7 +24,7 @@ pub mod github_control {
         }
 
         let output = cmd.output()?;
-        
+
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Failed to view PR: {}", error_msg).into());
@@ -35,15 +35,19 @@ pub mod github_control {
     }
 
     /// List all pull requests
-    /// 
+    ///
     /// # Arguments
     /// * `state` - Filter by state: "open", "closed", or "all" (default: "open")
     /// * `repo` - Optional repository in format "owner/repo". If None, uses current repo
     /// * `limit` - Optional limit on number of PRs to return
-    /// 
+    ///
     /// # Returns
     /// JSON string containing array of PR details
-    pub fn list_prs(state: Option<&str>, repo: Option<&str>, limit: Option<u32>) -> Result<String, Box<dyn Error>> {
+    pub fn list_prs(
+        state: Option<&str>,
+        repo: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<String, Box<dyn Error>> {
         let mut cmd = Command::new("gh");
         cmd.arg("pr");
         cmd.arg("list");
@@ -69,7 +73,7 @@ pub mod github_control {
         }
 
         let output = cmd.output()?;
-        
+
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Failed to list PRs: {}", error_msg).into());
@@ -80,11 +84,11 @@ pub mod github_control {
     }
 
     /// View details of a specific issue
-    /// 
+    ///
     /// # Arguments
     /// * `issue_number` - The issue number to view
     /// * `repo` - Optional repository in format "owner/repo". If None, uses current repo
-    /// 
+    ///
     /// # Returns
     /// JSON string containing issue details
     pub fn view_issue(issue_number: u64, repo: Option<&str>) -> Result<String, Box<dyn Error>> {
@@ -101,7 +105,7 @@ pub mod github_control {
         }
 
         let output = cmd.output()?;
-        
+
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Failed to view issue: {}", error_msg).into());
@@ -112,15 +116,19 @@ pub mod github_control {
     }
 
     /// List all issues
-    /// 
+    ///
     /// # Arguments
     /// * `state` - Filter by state: "open", "closed", or "all" (default: "open")
     /// * `repo` - Optional repository in format "owner/repo". If None, uses current repo
     /// * `limit` - Optional limit on number of issues to return
-    /// 
+    ///
     /// # Returns
     /// JSON string containing array of issue details
-    pub fn list_issues(state: Option<&str>, repo: Option<&str>, limit: Option<u32>) -> Result<String, Box<dyn Error>> {
+    pub fn list_issues(
+        state: Option<&str>,
+        repo: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<String, Box<dyn Error>> {
         let mut cmd = Command::new("gh");
         cmd.arg("issue");
         cmd.arg("list");
@@ -146,7 +154,7 @@ pub mod github_control {
         }
 
         let output = cmd.output()?;
-        
+
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Failed to list issues: {}", error_msg).into());
@@ -157,13 +165,13 @@ pub mod github_control {
     }
 
     /// Create a new issue
-    /// 
+    ///
     /// # Arguments
     /// * `title` - The title of the issue
     /// * `body` - The body/description of the issue
     /// * `repo` - Optional repository in format "owner/repo". If None, uses current repo
     /// * `labels` - Optional vector of label names to add to the issue
-    /// 
+    ///
     /// # Returns
     /// JSON string containing the created issue details
     pub fn create_issue(
@@ -195,7 +203,7 @@ pub mod github_control {
         }
 
         let output = cmd.output()?;
-        
+
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Failed to create issue: {}", error_msg).into());
@@ -206,7 +214,7 @@ pub mod github_control {
     }
 
     /// Create a new pull request
-    /// 
+    ///
     /// # Arguments
     /// * `title` - The title of the PR
     /// * `body` - The body/description of the PR
@@ -214,7 +222,7 @@ pub mod github_control {
     /// * `base` - The branch to merge into (default: "main" or "master")
     /// * `repo` - Optional repository in format "owner/repo". If None, uses current repo
     /// * `draft` - Whether to create as a draft PR (default: false)
-    /// 
+    ///
     /// # Returns
     /// JSON string containing the created PR details
     pub fn create_pr(
@@ -235,7 +243,9 @@ pub mod github_control {
         cmd.arg("--head");
         cmd.arg(head);
         cmd.arg("--json");
-        cmd.arg("number,title,body,state,author,createdAt,headRefName,baseRefName,url,isDraft,labels");
+        cmd.arg(
+            "number,title,body,state,author,createdAt,headRefName,baseRefName,url,isDraft,labels",
+        );
 
         if let Some(base) = base {
             cmd.arg("--base");
@@ -252,7 +262,7 @@ pub mod github_control {
         }
 
         let output = cmd.output()?;
-        
+
         if !output.status.success() {
             let error_msg = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Failed to create PR: {}", error_msg).into());
@@ -262,4 +272,3 @@ pub mod github_control {
         Ok(stdout)
     }
 }
-

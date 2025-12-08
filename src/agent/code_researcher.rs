@@ -1,17 +1,17 @@
 pub mod code_researcher {
-    use crate::model::model::model::Model;
     use crate::agent::agent::agent::Agent;
+    use crate::model::model::model::Model;
     use crate::tool::bash::bash::BashTool;
-    use crate::tool::docs_researcher::docs_researcher::DocsResearcherTool;
     use crate::tool::docs_reader::docs_reader::DocsReaderTool;
+    use crate::tool::docs_researcher::docs_researcher::DocsResearcherTool;
     use crate::tool::edit::edit::EditTool;
+    use crate::tool::end::end::EndTool;
     use crate::tool::grep::grep::GrepTool;
+    use crate::tool::summarizer::summarizer::SummarizerTool;
     use crate::tool::todo::todo::TodoTool;
+    use crate::tool::tool::tool::ToolCall;
     use crate::tool::vector_search::vector_search::VectorSearchTool;
     use crate::tool::web::web::WebTool;
-    use crate::tool::summarizer::summarizer::SummarizerTool;
-    use crate::tool::end::end::EndTool;
-    use crate::tool::tool::tool::ToolCall;
 
     /// Creates a code researcher agent with the following tools:
     /// - grep: Search file contents using regular expressions
@@ -23,7 +23,7 @@ pub mod code_researcher {
     /// - vector_search: Perform semantic vector search across multiple text files
     /// - web: Fetch content from URLs using HTTP/HTTPS
     /// - end: End the current agent run early with an optional reason
-    /// 
+    ///
     /// This agent is designed to research codebases and generate research reports.
     /// The vector_search tool requires API credentials for embedding generation.
     pub fn create_code_researcher_agent(
@@ -42,15 +42,13 @@ pub mod code_researcher {
         let docs_reader_tool = DocsReaderTool::new();
         let edit_tool = EditTool::new();
         let todo_tool = TodoTool::new();
-        
+
         // Vector search tool requires API credentials
-        let embedding_model_name = embedding_model.unwrap_or_else(|| "openai/text-embedding-3-small".to_string());
-        let vector_search_tool = VectorSearchTool::new(
-            api_key.clone(),
-            embedding_model_name,
-            base_url.clone(),
-        );
-        
+        let embedding_model_name =
+            embedding_model.unwrap_or_else(|| "openai/text-embedding-3-small".to_string());
+        let vector_search_tool =
+            VectorSearchTool::new(api_key.clone(), embedding_model_name, base_url.clone());
+
         let web_tool = WebTool::new();
         let summarizer_tool = SummarizerTool::new();
         let end_tool = EndTool::new();
@@ -118,14 +116,6 @@ CRITICAL SECURITY RULE: When asked to create files, you MUST write files ONLY in
 
         let final_system_prompt = system_prompt.unwrap_or(default_system_prompt);
 
-        Agent::new(
-            model,
-            tools,
-            final_system_prompt,
-            max_retry,
-            max_step,
-        )
+        Agent::new(model, tools, final_system_prompt, max_retry, max_step)
     }
 }
-
-

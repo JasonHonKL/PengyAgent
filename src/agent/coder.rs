@@ -1,16 +1,16 @@
 pub mod coder {
-    use crate::model::model::model::Model;
     use crate::agent::agent::agent::Agent;
+    use crate::model::model::model::Model;
     use crate::tool::bash::bash::BashTool;
     use crate::tool::docs_researcher::docs_researcher::DocsResearcherTool;
     use crate::tool::edit::edit::EditTool;
+    use crate::tool::end::end::EndTool;
     use crate::tool::file_manager::file_manager::FileManagerTool;
     use crate::tool::grep::grep::GrepTool;
-    use crate::tool::todo::todo::TodoTool;
-    use crate::tool::web::web::WebTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
-    use crate::tool::end::end::EndTool;
+    use crate::tool::todo::todo::TodoTool;
     use crate::tool::tool::tool::ToolCall;
+    use crate::tool::web::web::WebTool;
 
     /// Creates a coding agent with the following tools:
     /// - file_manager: Create files or folders inside the workspace
@@ -68,6 +68,7 @@ You are running in a terminal-based AI agent system (Pengy Agent). Your response
 - Tool calls shown as cards with status indicators (running/success/error)
 - File edits displayed as side-by-side diffs (left: old, right: new)
 - Modified files tracked in a sidebar showing line counts (+added -removed)
+- Research notes live in the 'pengy_docs' folder; read/use them when relevant.
 - All file operations must use absolute paths rooted in the workspace
 - The system automatically tracks and displays file modifications
 
@@ -98,14 +99,6 @@ WORKFLOW:
 
         let final_system_prompt = system_prompt.unwrap_or(default_system_prompt);
 
-        Agent::new(
-            model,
-            tools,
-            final_system_prompt,
-            max_retry,
-            max_step,
-        )
+        Agent::new(model, tools, final_system_prompt, max_retry, max_step)
     }
 }
-
-
