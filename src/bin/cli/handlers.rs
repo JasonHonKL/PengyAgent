@@ -212,10 +212,17 @@ fn filtered_models(app: &App) -> Vec<ModelOption> {
 }
 
 fn filtered_provider_models(app: &App) -> Vec<ModelOption> {
-    let provider_models: Vec<ModelOption> = App::get_available_models()
+    let mut provider_models: Vec<ModelOption> = App::get_available_models()
         .into_iter()
         .filter(|m| m.name.starts_with("Provider:"))
         .collect();
+    
+    // Add Custom Base URL option
+    provider_models.push(ModelOption {
+        name: "Provider: Custom Base URL".to_string(),
+        provider: "Custom".to_string(),
+        base_url: "".to_string(), // Empty means user will enter custom URL
+    });
 
     if app.search_query.is_empty() {
         provider_models
@@ -490,8 +497,24 @@ fn handle_settings_key(app: &mut App, key: KeyCode) -> bool {
             let mut model = models[selected_idx].clone();
 
             if model.provider != "Custom" {
-                model.base_url = normalized_base_url.clone();
-                app.selected_model = Some(model);
+                // Only update model's base_url if we're actually selecting a new model
+                // If we're just updating settings, preserve the current selected model
+                if let Some(ref current_model) = app.selected_model {
+                    if current_model.name == model.name && current_model.provider == model.provider {
+                        // Same model - preserve it, just update base_url for initialization
+                        let mut updated_model = current_model.clone();
+                        updated_model.base_url = normalized_base_url.clone();
+                        app.selected_model = Some(updated_model);
+                    } else {
+                        // Different model selected - update it
+                        model.base_url = normalized_base_url.clone();
+                        app.selected_model = Some(model);
+                    }
+                } else {
+                    // No model selected - set the new one
+                    model.base_url = normalized_base_url.clone();
+                    app.selected_model = Some(model);
+                }
                 let _ = app.save_config();
                 match app.initialize_model() {
                     Ok(_) => {
@@ -503,7 +526,10 @@ fn handle_settings_key(app: &mut App, key: KeyCode) -> bool {
                     }
                 }
             } else {
-                app.custom_base_url = normalized_base_url.clone();
+                // Custom model - preserve custom_base_url, don't overwrite it
+                if app.custom_base_url.is_empty() {
+                    app.custom_base_url = normalized_base_url.clone();
+                }
                 app.selected_model = Some(model);
                 let _ = app.save_config();
                 app.state = AppState::CustomModel;
@@ -552,19 +578,32 @@ fn handle_baseurl_selector_key(app: &mut App, key: KeyCode) -> bool {
                 .selected()
                 .and_then(|i| filtered.get(i))
             {
-                let normalized_base = App::normalize_base_url(&selected.base_url);
-                app.settings_api_key = app.api_key.clone();
-                app.settings_base_url = normalized_base.clone();
-                app.settings_field = 1;
-                app.error = None;
-                app.model_search_focused = false;
-                app.search_query.clear();
+                // If Custom Base URL is selected, go to settings to enter it
+                if selected.name == "Provider: Custom Base URL" {
+                    app.settings_api_key = app.api_key.clone();
+                    // Keep current settings_base_url or use empty to prompt for input
+                    if app.settings_base_url.is_empty() {
+                        app.settings_base_url = DEFAULT_BASE_URL.to_string();
+                    }
+                    app.settings_field = 1; // Focus on base URL field
+                    app.error = None;
+                    app.model_search_focused = false;
+                    app.search_query.clear();
+                    app.state = AppState::Settings;
+                } else {
+                    let normalized_base = App::normalize_base_url(&selected.base_url);
+                    app.settings_api_key = app.api_key.clone();
+                    app.settings_base_url = normalized_base.clone();
+                    app.settings_field = 1;
+                    app.error = None;
+                    app.model_search_focused = false;
+                    app.search_query.clear();
 
-                if let Some(ref mut selected_model) = app.selected_model {
-                    selected_model.base_url = normalized_base.clone();
+                    // Don't change the selected model's base_url - only update settings
+                    // The model will use settings_base_url when initialized
+
+                    app.state = AppState::Settings;
                 }
-
-                app.state = AppState::Settings;
             }
         }
         KeyCode::Up if !app.model_search_focused => {
@@ -608,7 +647,8 @@ fn handle_custom_model_key(app: &mut App, key: KeyCode) -> bool {
         KeyCode::Tab => app.custom_model_field = 0,
         KeyCode::Enter => {
             if !app.custom_model_name.is_empty() {
-                // Reuse the currently configured base URL instead of asking in the custom model view.
+                // Preserve the current base URL - don't change it
+                // Use custom_base_url if set, otherwise use settings_base_url, otherwise default
                 let normalized_base_url = {
                     let normalized = App::normalize_base_url(&app.custom_base_url);
                     if normalized.is_empty() {
@@ -623,11 +663,11 @@ fn handle_custom_model_key(app: &mut App, key: KeyCode) -> bool {
                     }
                 };
 
-                app.custom_base_url = normalized_base_url.clone();
+                // Don't update custom_base_url or settings_base_url - preserve them
                 app.selected_model = Some(ModelOption {
                     name: app.custom_model_name.clone(),
                     provider: "Custom".to_string(),
-                    base_url: normalized_base_url,
+                    base_url: normalized_base_url.clone(),
                 });
 
                 if app.api_key.is_empty() {

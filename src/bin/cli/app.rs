@@ -709,6 +709,11 @@ impl App {
                 base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
             },
             ModelOption {
+                name: "Provider: Ollama".to_string(),
+                provider: "Ollama".to_string(),
+                base_url: "http://localhost:11434/v1".to_string(),
+            },
+            ModelOption {
                 name: "Custom Model".to_string(),
                 provider: "Custom".to_string(),
                 base_url: "".to_string(),

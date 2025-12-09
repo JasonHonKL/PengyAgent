@@ -630,8 +630,7 @@ fn render_tool_call_card(
                             let total_lines = content_lines.len();
                             
                             for (idx, line) in content_lines.iter().take(display_limit).enumerate() {
-                                let highlighted = highlight_code_line(line, lang, status_fg, code_bg);
-                                // Add line numbers and preserve highlighting
+                                // Manually apply syntax highlighting without the wrapper function
                                 let mut line_spans = vec![
                                     Span::styled("       ", Style::default()),
                                     Span::styled(
@@ -639,10 +638,27 @@ fn render_tool_call_card(
                                         Style::default().fg(Color::Rgb(70, 70, 90)),
                                     ),
                                 ];
-                                // Extract spans from highlighted line (skip the first "  " span)
-                                for span in highlighted.spans.into_iter().skip(1) {
-                                    line_spans.push(span);
+                                
+                                // Simple syntax highlighting by tokenizing the line
+                                let mut current_token = String::new();
+                                for ch in line.chars() {
+                                    if ch.is_whitespace() {
+                                        if !current_token.is_empty() {
+                                            line_spans.push(style_token(&current_token, lang, status_fg, code_bg));
+                                            current_token.clear();
+                                        }
+                                        line_spans.push(Span::styled(
+                                            ch.to_string(),
+                                            Style::default().bg(code_bg).fg(Color::Gray),
+                                        ));
+                                    } else {
+                                        current_token.push(ch);
+                                    }
                                 }
+                                if !current_token.is_empty() {
+                                    line_spans.push(style_token(&current_token, lang, status_fg, code_bg));
+                                }
+                                
                                 lines.push(Line::from(line_spans));
                             }
 
@@ -739,7 +755,7 @@ fn render_tool_call_card(
                         (idx + 1, *line)
                     };
 
-                    let highlighted = highlight_code_line(code_body, lang, status_fg, code_bg);
+                    // Manually apply syntax highlighting
                     let mut line_spans = vec![
                         Span::styled("       ", Style::default()),
                         Span::styled(
@@ -747,9 +763,27 @@ fn render_tool_call_card(
                             Style::default().fg(Color::Rgb(70, 70, 90)),
                         ),
                     ];
-                    for span in highlighted.spans.into_iter().skip(1) {
-                        line_spans.push(span);
+                    
+                    // Simple syntax highlighting by tokenizing the line
+                    let mut current_token = String::new();
+                    for ch in code_body.chars() {
+                        if ch.is_whitespace() {
+                            if !current_token.is_empty() {
+                                line_spans.push(style_token(&current_token, lang, status_fg, code_bg));
+                                current_token.clear();
+                            }
+                            line_spans.push(Span::styled(
+                                ch.to_string(),
+                                Style::default().bg(code_bg).fg(Color::Gray),
+                            ));
+                        } else {
+                            current_token.push(ch);
+                        }
                     }
+                    if !current_token.is_empty() {
+                        line_spans.push(style_token(&current_token, lang, status_fg, code_bg));
+                    }
+                    
                     lines.push(Line::from(line_spans));
                     displayed += 1;
                 }
