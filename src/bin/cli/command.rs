@@ -3,7 +3,7 @@ use crate::constants::DEFAULT_BASE_URL;
 use pengy_agent::agent::agent::agent::AgentEvent;
 use pengy_agent::agent::code_researcher::code_researcher::create_code_researcher_agent;
 use pengy_agent::agent::chat_agent::chat_agent::create_chat_agent;
-use pengy_agent::agent::coder::coder::create_coder_agent;
+use pengy_agent::agent::coder_v2::coder_v2::create_coder_v2_agent;
 use pengy_agent::agent::control_agent::control_agent::create_control_agent;
 use pengy_agent::agent::issue_agent::issue_agent::create_issue_agent;
 use pengy_agent::agent::pengy_agent::pengy_agent::run_pengy_agent;
@@ -183,7 +183,7 @@ pub(crate) async fn run_cmd_mode(
             .await;
         }
         AgentType::Coder => {
-            let mut agent = create_coder_agent(model, None, Some(3), Some(50));
+            let mut agent = create_coder_v2_agent(model, None, Some(3), Some(50));
             agent.run(prompt, callback).await;
         }
         AgentType::ChatAgent => {

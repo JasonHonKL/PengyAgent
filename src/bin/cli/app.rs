@@ -1,7 +1,7 @@
 use crate::constants::{CONFIG_FILE, DEFAULT_BASE_URL, EMBED_LOGO};
 use pengy_agent::agent::agent::agent::{Agent, AgentEvent};
 use pengy_agent::agent::code_researcher::code_researcher::create_code_researcher_agent;
-use pengy_agent::agent::coder::coder::create_coder_agent;
+use pengy_agent::agent::coder_v2::coder_v2::create_coder_v2_agent;
 use pengy_agent::agent::chat_agent::chat_agent::create_chat_agent;
 use pengy_agent::agent::control_agent::control_agent::create_control_agent;
 use pengy_agent::agent::issue_agent::issue_agent::create_issue_agent;
@@ -13,10 +13,11 @@ use ratatui::widgets::{ListState, ScrollbarState};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
-use std::{env, error::Error, fs, path::PathBuf};
+use std::{env, error::Error, fs, fs::OpenOptions, path::PathBuf};
+use std::io::Write;
 use tokio::sync::mpsc;
 
-const SESSION_DIR: &str = "pengy_sessions";
+const SESSION_DIR: &str = ".pengy/pengy_sessions";
 const SESSION_FILE_PREFIX: &str = "session_";
 const MAX_TITLE_LEN: usize = 64;
 
@@ -50,6 +51,7 @@ pub enum ChatMessage {
     User(String),
     Assistant(String),
     ToolCall {
+        #[allow(dead_code)]
         id: String,
         name: String,
         args: String,
@@ -62,6 +64,7 @@ pub enum ChatMessage {
 
 #[derive(Clone, PartialEq)]
 pub enum ToolStatus {
+    #[allow(dead_code)]
     Running,
     Success,
     Error,
@@ -104,6 +107,7 @@ pub struct App {
     pub(crate) logo: String,
     pub(crate) list_state: ListState,
     pub(crate) scroll_state: ScrollbarState,
+    pub(crate) scroll_skip_ticks: u8,
     pub(crate) chat_input: String,
     pub(crate) input_cursor: usize,
     pub(crate) loading: bool,
@@ -136,7 +140,15 @@ pub struct App {
     pub(crate) agent_rx: mpsc::UnboundedReceiver<Agent>,
     pub(crate) agent_tx: mpsc::UnboundedSender<Agent>,
     pub(crate) modified_files: HashMap<String, (usize, usize)>,
-    pub(crate) pending_tool_calls: Vec<(String, String, String)>,
+    pub(crate) pending_tool_calls: Vec<PendingToolCall>,
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingToolCall {
+    pub id: String,
+    pub name: String,
+    pub args: String,
+    pub message_index: usize,
 }
 
 impl App {
@@ -267,7 +279,7 @@ impl App {
         Some((parsed.title, chat))
     }
 
-    fn load_sessions_from_disk() -> (Vec<String>, Vec<PathBuf>, usize, Vec<ChatMessage>) {
+    fn load_sessions_from_disk() -> (Vec<String>, Vec<PathBuf>) {
         let dir = Self::ensure_session_dir();
         let mut entries: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
         if let Ok(read_dir) = fs::read_dir(&dir) {
@@ -291,28 +303,15 @@ impl App {
 
         let mut titles = Vec::new();
         let mut paths = Vec::new();
-        let mut first_messages = Vec::new();
-        let current_idx = 0;
 
-        for (idx, (_, path)) in entries.iter().enumerate() {
-            if let Some((title, messages)) = Self::read_session_file(&path.to_path_buf()) {
+        for (_, path) in entries.iter() {
+            if let Some((title, _messages)) = Self::read_session_file(&path.to_path_buf()) {
                 titles.push(title);
                 paths.push(path.to_path_buf());
-                if idx == 0 {
-                    first_messages = messages;
-                }
             }
         }
 
-        if titles.is_empty() {
-            let title = "New session - default".to_string();
-            let path = dir.join(format!("{}{}.json", SESSION_FILE_PREFIX, "default"));
-            Self::write_session_file(&path, &title, &[]);
-            titles.push(title);
-            paths.push(path);
-        }
-
-        (titles, paths, current_idx, first_messages)
+        (titles, paths)
     }
 
     pub(crate) fn save_current_session(&mut self) {
@@ -389,10 +388,10 @@ impl App {
             if m.provider == "Custom" {
                 (m.name.clone(), m.base_url.clone())
             } else {
-                (String::new(), DEFAULT_BASE_URL.to_string())
+                (String::new(), String::new())
             }
         } else {
-            (String::new(), DEFAULT_BASE_URL.to_string())
+            (String::new(), String::new())
         };
 
         let settings_base_url = selected_model
@@ -405,10 +404,10 @@ impl App {
             .join(".pengy_todo.json");
         let _ = std::fs::remove_file(&todo_file);
 
-        let (sessions, session_paths, current_session, initial_messages) =
-            Self::load_sessions_from_disk();
+        let initial_messages: Vec<ChatMessage> = Vec::new();
+        let (sessions, session_paths) = Self::load_sessions_from_disk();
 
-        Ok(Self {
+        let mut app = Self {
             state: AppState::Welcome,
             api_key: api_key.clone(),
             selected_model,
@@ -419,6 +418,7 @@ impl App {
             logo,
             list_state,
             scroll_state: ScrollbarState::default(),
+            scroll_skip_ticks: 0,
             chat_input: String::new(),
             input_cursor: 0,
             loading: false,
@@ -428,12 +428,12 @@ impl App {
             theme_list_state,
             session_list_state: {
                 let mut s = ListState::default();
-                s.select(Some(current_session));
+                s.select(Some(0));
                 s
             },
             sessions,
             session_paths,
-            current_session,
+            current_session: 0,
             settings_api_key: api_key,
             settings_base_url,
             settings_field: 0,
@@ -456,7 +456,12 @@ impl App {
             agent_tx,
             modified_files: HashMap::new(),
             pending_tool_calls: Vec::new(),
-        })
+        };
+
+        // Always start with a fresh session; existing sessions are available via selector.
+        app.create_new_session();
+
+        Ok(app)
     }
 
     fn load_config() -> Config {
@@ -755,12 +760,30 @@ impl App {
         ]
     }
 
+    pub(crate) fn reset_custom_model_fields(&mut self) {
+        self.custom_model_name.clear();
+        // Default the custom base URL to whatever the user currently has configured
+        // so the custom model screen doesn't need to ask for it explicitly.
+        self.custom_base_url = if self.settings_base_url.is_empty() {
+            DEFAULT_BASE_URL.to_string()
+        } else {
+            self.settings_base_url.clone()
+        };
+        self.custom_model_field = 0;
+        self.error = None;
+    }
+
     pub(crate) fn normalize_base_url(base_url: &str) -> String {
         let trimmed = base_url.trim();
         if trimmed.is_empty() {
             return String::new();
         }
         let mut normalized = trimmed.trim_end_matches('/').to_string();
+
+        // Auto-prepend https:// when user omits scheme (common for custom URLs)
+        if !normalized.starts_with("http://") && !normalized.starts_with("https://") {
+            normalized = format!("https://{}", normalized);
+        }
 
         for suffix in ["/chat/completions", "/completions", "/completion"] {
             if normalized.ends_with(suffix) {
@@ -798,7 +821,7 @@ impl App {
                 self.agent = None;
             }
             AgentType::Coder => {
-                let agent = create_coder_agent(model, None, Some(3), Some(50));
+                let agent = create_coder_v2_agent(model, None, Some(3), Some(50));
                 self.agent = Some(agent);
             }
             AgentType::ChatAgent => {
@@ -970,38 +993,75 @@ impl App {
                         "tool_{}",
                         self.chat_messages.len() + self.pending_tool_calls.len()
                     );
-                    self.pending_tool_calls.push((tool_id, tool_name, args));
+                    let message_index = self.chat_messages.len();
+                    self.chat_messages.push(ChatMessage::ToolCall {
+                        id: tool_id.clone(),
+                        name: tool_name.clone(),
+                        args: args.clone(),
+                        result: None,
+                        status: ToolStatus::Running,
+                    });
+                    self.log_event(
+                        "tool_call",
+                        &format!("{} | args: {}", tool_name, args),
+                    );
+                    self.pending_tool_calls.push(PendingToolCall {
+                        id: tool_id,
+                        name: tool_name,
+                        args,
+                        message_index,
+                    });
+                    changed = true;
                 }
                 AgentEvent::ToolResult { result } => {
-                    if let Some((tool_id, name, args_str)) = self.pending_tool_calls.pop() {
-                        self.chat_messages.push(ChatMessage::ToolCall {
-                            id: tool_id.clone(),
-                            name: name.clone(),
-                            args: args_str.clone(),
-                            result: Some(result.clone()),
-                            status: ToolStatus::Success,
-                        });
+                    let result_clone = result.clone();
+                    if let Some(pending) = self.pending_tool_calls.pop() {
+                        if let Some(ChatMessage::ToolCall {
+                            result: existing_result,
+                            status,
+                            ..
+                        }) = self.chat_messages.get_mut(pending.message_index)
+                        {
+                            *existing_result = Some(result_clone.clone());
+                            *status = ToolStatus::Success;
+                        } else {
+                            self.chat_messages.push(ChatMessage::ToolCall {
+                                id: pending.id.clone(),
+                                name: pending.name.clone(),
+                                args: pending.args.clone(),
+                                result: Some(result_clone.clone()),
+                                status: ToolStatus::Success,
+                            });
+                        }
                         changed = true;
 
-                        if name == "edit" {
+                        // Track modified files for edit and edit_file tools
+                        if pending.name == "edit" || pending.name == "edit_file" {
                             if let Ok(json_args) =
-                                serde_json::from_str::<serde_json::Value>(&args_str)
+                                serde_json::from_str::<serde_json::Value>(&pending.args)
                             {
                                 if let Some(file_path) =
                                     json_args.get("filePath").and_then(|v| v.as_str())
                                 {
-                                    if let (Some(old_str), Some(new_str)) = (
-                                        json_args.get("oldString").and_then(|v| v.as_str()),
-                                        json_args.get("newString").and_then(|v| v.as_str()),
-                                    ) {
-                                        let added = new_str.lines().count();
-                                        let removed = old_str.lines().count();
-                                        let entry = self
-                                            .modified_files
-                                            .entry(file_path.to_string())
-                                            .or_insert((0, 0));
-                                        entry.0 += added;
-                                        entry.1 += removed;
+                                    // Just mark the file as modified, don't try to count lines accurately
+                                    self.modified_files
+                                        .entry(file_path.to_string())
+                                        .or_insert((1, 0));
+                                }
+                            }
+                        }
+                        // Track file_manager writes
+                        if pending.name == "file_manager" {
+                            if let Ok(json_args) =
+                                serde_json::from_str::<serde_json::Value>(&pending.args)
+                            {
+                                if let Some(op) = json_args.get("operation").and_then(|v| v.as_str())  {
+                                    if op == "write" || op == "create" {
+                                        if let Some(path) = json_args.get("path").and_then(|v| v.as_str()) {
+                                            self.modified_files
+                                                .entry(path.to_string())
+                                                .or_insert((1, 0));
+                                        }
                                     }
                                 }
                             }
@@ -1011,11 +1071,12 @@ impl App {
                             id: format!("tool_{}", self.chat_messages.len()),
                             name: "unknown".to_string(),
                             args: String::new(),
-                            result: Some(result),
+                            result: Some(result_clone.clone()),
                             status: ToolStatus::Success,
                         });
                         changed = true;
                     }
+                    self.log_event("tool_result", &result_clone);
                 }
                 AgentEvent::TokenUsage {
                     prompt_tokens,
@@ -1029,16 +1090,19 @@ impl App {
                     ));
                 }
                 AgentEvent::Thinking { content } => {
-                    self.chat_messages.push(ChatMessage::Thinking(content));
+                    self.chat_messages.push(ChatMessage::Thinking(content.clone()));
+                    self.log_event("thinking", &content);
                     changed = true;
                 }
                 AgentEvent::FinalResponse { content } => {
-                    self.chat_messages.push(ChatMessage::Assistant(content));
+                    self.chat_messages.push(ChatMessage::Assistant(content.clone()));
+                    self.log_event("assistant", &content);
                     self.loading = false;
                     changed = true;
                 }
                 AgentEvent::Error { error } => {
                     self.chat_messages.push(ChatMessage::Error(error.clone()));
+                    self.log_event("error", &error);
                     changed = true;
                     if let Some(ChatMessage::ToolCall { status, .. }) =
                         self.chat_messages.iter_mut().rev().find(|m| {
@@ -1073,6 +1137,40 @@ impl App {
                 self.scroll_state = self.scroll_state.position(last);
             }
             self.save_current_session();
+        }
+    }
+
+    fn log_event(&self, role: &str, content: &str) {
+        if content.is_empty() {
+            return;
+        }
+        let session_name = self
+            .sessions
+            .get(self.current_session)
+            .cloned()
+            .unwrap_or_else(|| "session".to_string());
+        let sanitized: String = session_name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        // Write logs to .pengy directory for low-level capture.
+        let file = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".pengy")
+            .join(format!("pengy_json_{}.json", sanitized));
+        let _ = fs::create_dir_all(file.parent().unwrap_or(&std::path::PathBuf::from(".pengy")));
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let payload = serde_json::json!({
+            "ts": ts,
+            "session": session_name,
+            "role": role,
+            "content": content,
+        });
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(file) {
+            let _ = writeln!(f, "{}", payload);
         }
     }
 }

@@ -1615,6 +1615,7 @@ dependencies = [
  "textwrap",
  "tokio",
  "tui-textarea",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]

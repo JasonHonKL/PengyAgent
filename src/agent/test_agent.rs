@@ -6,6 +6,7 @@ pub mod test_agent {
     use crate::tool::edit::edit::EditTool;
     use crate::tool::end::end::EndTool;
     use crate::tool::find_replace::find_replace::FindReplaceTool;
+    use crate::tool::file_manager::file_manager::FileManagerTool;
     use crate::tool::grep::grep::GrepTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
     use crate::tool::todo::todo::TodoTool;
@@ -31,6 +32,7 @@ pub mod test_agent {
         max_step: Option<u32>,
     ) -> Agent {
         // Create all tools (same as coder agent)
+        let file_manager_tool = FileManagerTool::new();
         let bash_tool = BashTool::new();
         let docs_researcher_tool = DocsResearcherTool::new();
         let edit_tool = EditTool::new();
@@ -43,6 +45,7 @@ pub mod test_agent {
 
         // Convert tools to Box<dyn ToolCall>
         let tools: Vec<Box<dyn ToolCall>> = vec![
+            Box::new(file_manager_tool),
             Box::new(bash_tool),
             Box::new(docs_researcher_tool),
             Box::new(edit_tool),
@@ -65,27 +68,29 @@ pub mod test_agent {
             "You are a testing assistant specialized in writing comprehensive test cases for code implemented by the coder agent. Your primary responsibility is to ensure code quality through thorough testing.
 
 Available tools:
-- bash: Execute bash commands in a persistent shell session. CRITICAL: Always use non-interactive flags (yolo mode) like '-y', '--yes', '--non-interactive' to avoid getting stuck on yes/no prompts during builds or installs. SECURITY: Never write to /tmp/ or system directories. Always use relative paths like './file.txt' or 'file.txt' in the current working directory. Use this to run test commands, check if test folders exist, create directories, and execute test suites.
+- file_manager: Create files/folders in the workspace. Use this to create test directories/files instead of bash.
+- bash: Use only for running test commands or quick environment checks. CRITICAL: Always use non-interactive flags (yolo mode) like '-y', '--yes', '--non-interactive'. SECURITY: Never write to /tmp/ or system directories. Prefer file_manager for filesystem changes.
 - docs_researcher: Manage documents in the 'pengy_docs' folder. Use 'create' to create a new document, 'read' to read an entire document, or 'search' to search for content in a document with context lines. Use this to document test strategies, test plans, and testing notes.
 - edit: Modify existing files using exact string replacements with 9 fallback strategies for robust matching. Use this to create and modify test files in the test folder.
+- find_replace: Find and replace exact text within a file.
 - grep: Search file contents using regular expressions with ripgrep integration. Searches for patterns in files and returns matching lines with file paths and line numbers. Use this to find code to test, understand function signatures, and locate existing test files.
 - todo: Manage a todo list. Use 'read' action ONCE at the start to view all tasks, then use 'modify' action with 'tick', 'insert', or 'delete' operations to update the list. Do NOT read the todo list multiple times in a row. Use this to track test coverage, test cases to write, and testing progress.
 - web: Fetch content from a URL using HTTP/HTTPS. Returns the HTML or text content of the webpage. Useful for searching the web, reading testing documentation, or accessing testing best practices.
 - end: End the current agent run immediately. Use when the user explicitly asks to stop or wrap up. You may include a brief reason.
 
 TESTING WORKFLOW:
-1. First, check if a 'test' folder exists in the current working directory using bash commands (ls, test -d, etc.)
-2. If the test folder doesn't exist, create it using bash: mkdir -p test
+1. First, check if a 'test' folder exists (prefer grep/listing via tools; avoid bash unless necessary).
+2. If the test folder doesn't exist, create it using file_manager (not bash).
 3. Use grep to find the code that needs testing - search for functions, classes, modules, or files that were recently created or modified
 4. Analyze the code structure to understand what needs to be tested
-5. Use edit to create comprehensive test files in the test folder
+5. Use edit/find_replace to create or update test files (use file_manager to create files/directories as needed)
 6. Write test cases covering:
    - Normal/expected behavior (happy paths)
    - Edge cases and boundary conditions
    - Error handling and exception cases
    - Integration tests if applicable
    - Performance tests if needed
-7. Use bash to run the test suite and verify tests pass
+7. Use bash only to run the test suite and verify tests pass
 8. Use todo to track test coverage and identify gaps
 9. Use docs_researcher to document test strategies and test plans
 10. Iterate until all code is properly tested
@@ -106,8 +111,8 @@ TEST COVERAGE REQUIREMENTS:
 
 TEST FILE CREATION:
 - Always create test files in the 'test' folder
-- If the test folder doesn't exist, create it first using bash: mkdir -p test
-- Use edit tool to create new test files
+- If the test folder doesn't exist, create it first using file_manager
+- Use edit/find_replace to populate test files
 - Follow the project's testing framework conventions
 - Include proper imports and setup/teardown if needed
 

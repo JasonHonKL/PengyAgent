@@ -33,6 +33,18 @@ fn wrap_to_width(text: &str, max: usize) -> Vec<String> {
     lines
 }
 
+fn wrap_preserve_lines(text: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.split('\n') {
+        if line.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        out.extend(wrap_to_width(line, max));
+    }
+    out
+}
+
 fn agent_accent(agent: AgentType) -> Color {
     match agent {
         AgentType::Coder => Color::Rgb(92, 136, 255),
@@ -241,250 +253,8 @@ pub(crate) fn ui(f: &mut Frame, app: &mut App) {
     render_status_bar(f, app, layout[3]);
 }
 
-fn parse_tool_args(args: &str) -> Option<serde_json::Value> {
-    serde_json::from_str(args).ok()
-}
-
-fn format_tool_args_display(name: &str, args: &str) -> Vec<Line<'static>> {
-    let parsed = parse_tool_args(args);
-
-    if let Some(json) = &parsed {
-        let mut result = Vec::new();
-        match name {
-            "file_manager" => {
-                let op = json
-                    .get("operation")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let path = json
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let content = json
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                result.push(Line::from(vec![
-                    Span::styled("  Op: ", Style::default().fg(Color::Gray)),
-                    Span::styled(op.to_string(), Style::default().fg(Color::White)),
-                ]));
-                if !path.is_empty() {
-                    result.push(Line::from(vec![
-                        Span::styled("  Path: ", Style::default().fg(Color::Gray)),
-                        Span::styled(path.to_string(), Style::default().fg(Color::White)),
-                    ]));
-                }
-                if !content.is_empty() {
-                    result.push(Line::from(vec![
-                        Span::styled("  Content:", Style::default().fg(Color::Gray)),
-                    ]));
-                    for line in content.lines().take(8) {
-                        let preview = if line.len() > 160 {
-                            format!("{}…", &line[..159])
-                        } else {
-                            line.to_string()
-                        };
-                        result.push(Line::from(vec![
-                            Span::styled(
-                                format!("    {}", preview),
-                                Style::default()
-                                    .fg(Color::White)
-                                    .bg(Color::Rgb(20, 20, 20)),
-                            ),
-                        ]));
-                    }
-                }
-            }
-            "todo" => {
-                if let Some(action_str) = json.get("action").and_then(|v| v.as_str()) {
-                    let action = action_str.to_string();
-                    let op = json
-                        .get("operation")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let desc = json
-                        .get("task_description")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let id = json.get("task_id").and_then(|v| v.as_u64());
-
-                    result.push(Line::from(vec![
-                        Span::styled("  Action: ", Style::default().fg(Color::Gray)),
-                        Span::styled(action, Style::default().fg(Color::White)),
-                    ]));
-                    if let Some(op) = op {
-                        result.push(Line::from(vec![
-                            Span::styled("  Operation: ", Style::default().fg(Color::Gray)),
-                            Span::styled(op, Style::default().fg(Color::White)),
-                        ]));
-                    }
-                    if let Some(desc) = desc {
-                        let truncated = if desc.len() > 60 {
-                            format!("{}...", &desc[..60])
-                        } else {
-                            desc
-                        };
-                        result.push(Line::from(vec![
-                            Span::styled("  Task: ", Style::default().fg(Color::Gray)),
-                            Span::styled(truncated, Style::default().fg(Color::White)),
-                        ]));
-                    }
-                    if let Some(id) = id {
-                        result.push(Line::from(vec![
-                            Span::styled("  Task ID: ", Style::default().fg(Color::Gray)),
-                            Span::styled(id.to_string(), Style::default().fg(Color::White)),
-                        ]));
-                    }
-                }
-            }
-            "edit" => {
-                if let (Some(file_path), Some(old_string), Some(new_string)) = (
-                    json.get("filePath")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    json.get("oldString")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    json.get("newString")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                ) {
-                    result.push(Line::from(vec![
-                        Span::styled("  File: ", Style::default().fg(Color::Gray)),
-                        Span::styled(file_path.clone(), Style::default().fg(Color::White)),
-                    ]));
-
-                    let old_lines: Vec<String> =
-                        old_string.lines().map(|s| s.to_string()).collect();
-                    let new_lines: Vec<String> =
-                        new_string.lines().map(|s| s.to_string()).collect();
-
-                    let max_lines = old_lines.len().max(new_lines.len());
-                    let max_display_lines = 25.min(max_lines);
-
-                    let left_width: usize = 52;
-                    let right_width: usize = 52;
-
-                    let truncate_to = |s: &str, width: usize| -> String {
-                        if s.len() > width {
-                            format!("{}…", &s[..width.saturating_sub(1)])
-                        } else {
-                            s.to_string()
-                        }
-                    };
-
-                    for idx in 0..max_display_lines {
-                        let old_line_owned = old_lines
-                            .get(idx)
-                            .cloned()
-                            .unwrap_or_else(|| "".to_string());
-                        let new_line_owned = new_lines
-                            .get(idx)
-                            .cloned()
-                            .unwrap_or_else(|| "".to_string());
-
-                        let line_num = idx + 1;
-
-                        let old_display =
-                            truncate_to(&old_line_owned, left_width.saturating_sub(6));
-                        let new_display =
-                            truncate_to(&new_line_owned, right_width.saturating_sub(6));
-
-                        let left_col = format!("{:>4} {}", line_num, old_display);
-                        let right_col = format!("{:>4} {}", line_num, new_display);
-
-                        let padded_left = format!("{:<width$}", left_col, width = left_width);
-                        let padded_right = format!("{:<width$}", right_col, width = right_width);
-
-                        if old_line_owned != new_line_owned {
-                            result.push(Line::from(vec![
-                                Span::styled(
-                                    padded_left.clone(),
-                                    Style::default().fg(Color::White).bg(Color::Rgb(40, 20, 20)),
-                                ),
-                                Span::styled(" │ ", Style::default().fg(Color::Rgb(60, 60, 60))),
-                                Span::styled(
-                                    padded_right.clone(),
-                                    Style::default()
-                                        .fg(Color::White)
-                                        .bg(Color::Rgb(20, 100, 20)),
-                                ),
-                            ]));
-                        } else if !new_line_owned.is_empty() {
-                            result.push(Line::from(vec![Span::styled(
-                                format!(
-                                    "{:<width$}",
-                                    format!("{:>4} {}", line_num, new_display),
-                                    width = left_width + 3 + right_width
-                                ),
-                                Style::default().fg(Color::White),
-                            )]));
-                        }
-                    }
-
-                    if max_lines > max_display_lines {
-                        result.push(Line::from(Span::styled(
-                            format!("  ... {} more lines", max_lines - max_display_lines),
-                            Style::default().fg(Color::DarkGray),
-                        )));
-                    }
-                }
-            }
-            "read_file" => {
-                if let Some(path) = json
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                {
-                    result.push(Line::from(vec![
-                        Span::styled("  Path: ", Style::default().fg(Color::Gray)),
-                        Span::styled(path.clone(), Style::default().fg(Color::White)),
-                    ]));
-                }
-            }
-            "grep" => {
-                if let Some(pattern) = json
-                    .get("pattern")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                {
-                    result.push(Line::from(vec![
-                        Span::styled("  Pattern: ", Style::default().fg(Color::Gray)),
-                        Span::styled(pattern.clone(), Style::default().fg(Color::White)),
-                    ]));
-                }
-                if let Some(path) = json
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                {
-                    result.push(Line::from(vec![
-                        Span::styled("  Path: ", Style::default().fg(Color::Gray)),
-                        Span::styled(path.clone(), Style::default().fg(Color::White)),
-                    ]));
-                }
-            }
-            _ => {
-                for seg in wrap_to_width(&format!("Args: {}", args), 80) {
-                    result.push(Line::from(Span::styled(
-                        seg,
-                        Style::default().fg(Color::Gray),
-                    )));
-                }
-            }
-        }
-
-        return result;
-    }
-
-    wrap_to_width(&format!("Args: {}", args), 80)
-        .into_iter()
-        .map(|seg| Line::from(Span::styled(seg, Style::default().fg(Color::Gray))))
-        .collect()
-}
-
 fn render_tool_call_card(
+    id: &str,
     name: &str,
     args: &str,
     result: &Option<String>,
@@ -492,193 +262,524 @@ fn render_tool_call_card(
 ) -> ListItem<'static> {
     let mut lines = Vec::new();
 
-    let (status_label, status_style, card_bg) = match status {
+    // Professional status indicators without background colors
+    let (status_icon, status_fg, card_bg) = match status {
         ToolStatus::Error => (
-            "[ERR]",
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
-            Color::Rgb(40, 24, 24),
+            "✗",
+            Color::Rgb(220, 80, 80),
+            Color::Rgb(26, 26, 28),
         ),
-        ToolStatus::Success => ("[OK]", Style::default().fg(Color::Green), Color::Rgb(28, 28, 28)),
-        ToolStatus::Running => ("[RUN]", Style::default().fg(Color::Yellow), Color::Rgb(32, 32, 32)),
+        ToolStatus::Success => (
+            "✓",
+            Color::Rgb(100, 180, 120),
+            Color::Rgb(26, 28, 26),
+        ),
+        ToolStatus::Running => (
+            "●",
+            Color::Rgb(200, 160, 80),
+            Color::Rgb(28, 27, 25),
+        ),
     };
 
-    // Header
+    // Subtle top border
     lines.push(Line::from(vec![
-        Span::styled(status_label, status_style),
         Span::styled("  ", Style::default()),
+        Span::styled(
+            "─".repeat(100),
+            Style::default().fg(Color::Rgb(50, 50, 55)),
+        ),
+    ]));
+
+    // Clean header without emojis
+    lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!(" {} ", status_icon),
+            Style::default()
+                .fg(status_fg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ", Style::default()),
         Span::styled(
             name.to_string(),
             Style::default()
-                .fg(Color::White)
+                .fg(Color::Rgb(200, 200, 220))
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  (model requested tool)", Style::default().fg(Color::Gray)),
+        Span::styled(
+            format!(" (call #{})", id.replace("tool_", "")),
+            Style::default().fg(Color::Rgb(100, 100, 120)),
+        ),
     ]));
 
-    // Quick edit summary (before args) to show what changed
-    if name == "edit" {
+    // Running indicator
+    if matches!(status, ToolStatus::Running) && result.is_none() {
+        lines.push(Line::from(vec![
+            Span::styled("     ", Style::default()),
+            Span::styled(
+                "→ ",
+                Style::default()
+                    .fg(status_fg),
+            ),
+            Span::styled(
+                "Executing...",
+                Style::default()
+                    .fg(Color::Rgb(140, 140, 160))
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+    }
+
+    // Tool-specific summary - professional display
+    if name == "edit" || name == "edit_file" {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
             let path = json
                 .get("filePath")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let old_snip = json
-                .get("oldString")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let new_snip = json
-                .get("newString")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let truncate = |s: &str| {
-                if s.len() > 80 {
-                    format!("{}…", &s[..79])
-                } else {
-                    s.to_string()
-                }
-            };
+                .unwrap_or("")
+                .to_string();
+            
             if !path.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::styled("File: ", Style::default().fg(Color::Gray)),
-                    Span::styled(path.to_string(), Style::default().fg(Color::White)),
-                ]));
-            }
-            if !old_snip.is_empty() || !new_snip.is_empty() {
-                lines.push(Line::from(vec![
-                    Span::styled("Replace:", Style::default().fg(Color::Gray)),
-                ]));
-                if !old_snip.is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("  - ", Style::default().fg(Color::Red)),
-                        Span::styled(truncate(old_snip), Style::default().fg(Color::White)),
-                    ]));
-                }
-                if !new_snip.is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("  + ", Style::default().fg(Color::Green)),
-                        Span::styled(truncate(new_snip), Style::default().fg(Color::White)),
-                    ]));
-                }
-            }
-        }
-    }
-
-    if !args.is_empty() {
-        lines.push(Line::from(Span::styled("Args:", Style::default().fg(Color::Gray))));
-        for line in format_tool_args_display(name, args) {
-            // indent args for clarity
-            let mut spans = vec![Span::styled("  ", Style::default().fg(Color::Gray))];
-            spans.extend(line.into_iter());
-            lines.push(Line::from(spans));
-        }
-    }
-
-    if let Some(res) = result {
-        // Make bash outputs readable: turn escaped newlines into real newlines.
-        let normalized = res.replace("\\r\\n", "\n").replace("\\n", "\n");
-
-        // Wrap per line to keep columns tidy.
-        let mut wrapped_lines: Vec<String> = Vec::new();
-        for line in normalized.lines() {
-            let segments = wrap_to_width(line, 80);
-            wrapped_lines.extend(segments);
-        }
-
-        if wrapped_lines.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("  Result: ", Style::default().fg(Color::Gray)),
-                Span::styled("", Style::default().fg(Color::Gray)),
-            ]));
-        } else {
-            lines.push(Line::from(vec![
-                Span::styled("Result:", Style::default().fg(Color::Gray)),
-            ]));
-            for (idx, seg) in wrapped_lines.iter().enumerate() {
-                let prefix = if idx == 0 { "  " } else { "  " };
-                lines.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(Color::Gray)),
+                    Span::styled("     ", Style::default()),
                     Span::styled(
-                        seg.clone(),
+                        "File: ".to_string(),
+                        Style::default().fg(Color::Rgb(110, 110, 130)),
+                    ),
+                    Span::styled(
+                        path,
                         Style::default()
-                            .fg(Color::White)
-                            .bg(Color::Rgb(20, 20, 20)),
+                            .fg(Color::Rgb(160, 180, 220)),
+                    ),
+                ]));
+
+                let old_snip = json
+                    .get("oldString")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let new_snip = json
+                    .get("newString")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                
+                let old_lines = old_snip.lines().count();
+                let new_lines = new_snip.lines().count();
+                
+                if old_lines > 0 || new_lines > 0 {
+                    lines.push(Line::from(vec![
+                        Span::styled("     ", Style::default()),
+                        Span::styled(
+                            "Changes: ".to_string(),
+                            Style::default().fg(Color::Rgb(110, 110, 130)),
+                        ),
+                        Span::styled(
+                            format!("-{} ", old_lines),
+                            Style::default()
+                                .fg(Color::Rgb(200, 100, 100)),
+                        ),
+                        Span::styled(
+                            format!("+{} ", new_lines),
+                            Style::default()
+                                .fg(Color::Rgb(100, 180, 120)),
+                        ),
+                        Span::styled(
+                            "lines".to_string(),
+                            Style::default().fg(Color::Rgb(110, 110, 130)),
+                        ),
+                    ]));
+                }
+            }
+        }
+    } else if name == "bash" || name == "run_terminal_cmd" {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+            if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()) {
+                let preview = if cmd.len() > 80 {
+                    format!("{}…", &cmd[..79])
+                } else {
+                    cmd.to_string()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("     ", Style::default()),
+                    Span::styled(
+                        "Command: ".to_string(),
+                        Style::default().fg(Color::Rgb(110, 110, 130)),
+                    ),
+                    Span::styled(
+                        preview,
+                        Style::default()
+                            .fg(Color::Rgb(180, 180, 200)),
                     ),
                 ]));
             }
-            if res.lines().count() > 20 {
-                lines.push(Line::from(Span::styled(
-                    "  ... (truncated)",
-                    Style::default().fg(Color::DarkGray),
-                )));
+        }
+    } else if name == "read_file" {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+            if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
+                lines.push(Line::from(vec![
+                    Span::styled("     ", Style::default()),
+                    Span::styled(
+                        "Reading: ".to_string(),
+                        Style::default().fg(Color::Rgb(110, 110, 130)),
+                    ),
+                    Span::styled(
+                        path.to_string(),
+                        Style::default().fg(Color::Rgb(160, 180, 220)),
+                    ),
+                ]));
+            }
+        }
+    } else if name == "grep" || name == "grep_search" {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+            if let Some(pattern) = json.get("pattern").and_then(|v| v.as_str()) {
+                let preview = if pattern.len() > 60 {
+                    format!("{}…", &pattern[..59])
+                } else {
+                    pattern.to_string()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("     ", Style::default()),
+                    Span::styled(
+                        "Pattern: ".to_string(),
+                        Style::default().fg(Color::Rgb(110, 110, 130)),
+                    ),
+                    Span::styled(
+                        format!("\"{}\"", preview),
+                        Style::default()
+                            .fg(Color::Rgb(200, 160, 100)),
+                    ),
+                ]));
+            }
+        }
+    } else if name == "list_dir" {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+            if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
+                lines.push(Line::from(vec![
+                    Span::styled("     ", Style::default()),
+                    Span::styled(
+                        "Directory: ".to_string(),
+                        Style::default().fg(Color::Rgb(110, 110, 130)),
+                    ),
+                    Span::styled(
+                        path.to_string(),
+                        Style::default().fg(Color::Rgb(160, 180, 220)),
+                    ),
+                ]));
             }
         }
     }
+
+    // Result section with professional styling
+    if let Some(res) = result {
+        let normalized = res.replace("\\r\\n", "\n").replace("\\n", "\n");
+
+        if !normalized.is_empty() {
+            lines.push(Line::from(Span::raw("")));
+            
+            // Result header
+            lines.push(Line::from(vec![
+                Span::styled("     ", Style::default()),
+                Span::styled(
+                    "Output:",
+                    Style::default()
+                        .fg(Color::Rgb(120, 120, 140))
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+
+            // Smart result truncation with line count
+            let result_lines: Vec<&str> = normalized.lines().collect();
+            let total_lines = result_lines.len();
+            let display_limit = 12;
+            let show_lines = result_lines.iter().take(display_limit);
+
+            for (idx, line) in show_lines.enumerate() {
+                let line_content = if line.len() > 95 {
+                    format!("{}…", &line[..94])
+                } else {
+                    line.to_string()
+                };
+
+                // Show line with subtle styling
+                if !line_content.trim().is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("       ", Style::default()),
+                        Span::styled(
+                            format!("{:>3} │ ", idx + 1),
+                            Style::default()
+                                .fg(Color::Rgb(70, 70, 90)),
+                        ),
+                        Span::styled(
+                            line_content,
+                            Style::default()
+                                .fg(Color::Rgb(180, 180, 200)),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(Span::styled(
+                        "           │",
+                        Style::default().fg(Color::Rgb(70, 70, 90)),
+                    )));
+                }
+            }
+
+            if total_lines > display_limit {
+                lines.push(Line::from(vec![
+                    Span::styled("           ", Style::default()),
+                    Span::styled(
+                        format!("└─ {} more lines omitted", total_lines - display_limit),
+                        Style::default()
+                            .fg(Color::Rgb(90, 90, 110))
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ]));
+            }
+        }
+    }
+
+    // Bottom border
+    lines.push(Line::from(Span::raw("")));
 
     ListItem::new(lines).style(Style::default().bg(card_bg))
 }
 
+#[allow(unused_variables)]
 fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.current_theme();
     let accent = agent_accent(app.selected_agent);
+    
+    // Theme-aware backgrounds
+    let (user_bg, assistant_bg, thinking_bg) = if theme.name == "Light" {
+        (
+            Color::Rgb(240, 242, 245),
+            Color::Rgb(248, 250, 252),
+            Color::Rgb(245, 247, 250),
+        )
+    } else {
+        (
+            Color::Rgb(28, 28, 32),
+            Color::Rgb(20, 24, 28),
+            Color::Rgb(24, 24, 30),
+        )
+    };
+
     let messages: Vec<ListItem> = app
         .chat_messages
         .iter()
         .map(|msg| match msg {
             ChatMessage::User(content) => {
-                let user_lines = vec![
-                    Line::from(vec![Span::raw("")]),
-                    Line::from(vec![Span::raw("")]),
-                    Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(Color::Gray)),
-                        Span::styled(content.clone(), Style::default().fg(Color::White)),
-                    ]),
-                    Line::from(vec![Span::raw("")]),
-                    Line::from(vec![Span::raw("")]),
-                ];
+                let mut user_lines = Vec::new();
+                
+                // Top spacing
+                user_lines.push(Line::from(Span::styled(" ", Style::default().bg(user_bg))));
+                
+                // Professional user header
+                user_lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().bg(user_bg)),
+                    Span::styled(
+                        "USER",
+                        Style::default()
+                            .fg(Color::Rgb(120, 160, 200))
+                            .bg(user_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                
+                user_lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().bg(user_bg)),
+                    Span::styled(
+                        "─".repeat(80),
+                        Style::default().fg(Color::Rgb(50, 50, 60)).bg(user_bg),
+                    ),
+                ]));
+                
+                // User content with proper wrapping
+                for line in content.lines() {
+                    user_lines.push(Line::from(vec![
+                        Span::styled("  ", Style::default().bg(user_bg)),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default()
+                                .fg(Color::Rgb(220, 220, 240))
+                                .bg(user_bg),
+                        ),
+                    ]));
+                }
+                
+                // Bottom spacing
+                user_lines.push(Line::from(Span::styled(" ", Style::default().bg(user_bg))));
+                
                 ListItem::new(user_lines)
             }
             ChatMessage::Assistant(content) => {
-                let mut assistant_lines = render_markdown_with_code(content, accent);
-                assistant_lines.insert(0, Line::from(Span::raw("")));
-                assistant_lines.push(Line::from(Span::raw("")));
+                let mut assistant_lines = Vec::new();
+                
+                // Top spacing
+                assistant_lines.push(Line::from(Span::styled(
+                    " ",
+                    Style::default().bg(assistant_bg),
+                )));
+                
+                // Professional assistant header
+                assistant_lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().bg(assistant_bg)),
+                    Span::styled(
+                        "ASSISTANT",
+                        Style::default()
+                            .fg(accent)
+                            .bg(assistant_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                
+                assistant_lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().bg(assistant_bg)),
+                    Span::styled(
+                        "─".repeat(80),
+                        Style::default().fg(Color::Rgb(45, 48, 52)).bg(assistant_bg),
+                    ),
+                ]));
+                
+                // Content with markdown and code highlighting
+                let content_lines = render_markdown_with_code(content, accent)
+                    .into_iter()
+                    .map(|ln| ln.patch_style(Style::default().bg(assistant_bg)))
+                    .collect::<Vec<_>>();
+                
+                assistant_lines.extend(content_lines);
+                
+                // Bottom spacing
+                assistant_lines.push(Line::from(Span::styled(
+                    " ",
+                    Style::default().bg(assistant_bg),
+                )));
+                
                 ListItem::new(assistant_lines)
             }
             ChatMessage::ToolCall {
+                id,
                 name,
                 args,
                 result,
                 status,
                 ..
-            } => render_tool_call_card(name, args, result, status),
-            ChatMessage::Thinking(content) => ListItem::new(Line::from(vec![
-                Span::styled(
-                    content.clone(),
-                    Style::default()
-                        .fg(Color::Gray)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ])),
-            ChatMessage::Error(err) => ListItem::new(Line::from(vec![
-                Span::styled(
-                    "Error: ",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(err.clone(), Style::default().fg(Color::Red)),
-            ])),
+            } => render_tool_call_card(id, name, args, result, status),
+            ChatMessage::Thinking(content) => {
+                let mut lines = Vec::new();
+                
+                // Professional thinking header
+                lines.push(Line::from(Span::styled(
+                    " ",
+                    Style::default().bg(thinking_bg),
+                )));
+                
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().bg(thinking_bg)),
+                    Span::styled(
+                        "REASONING",
+                        Style::default()
+                            .fg(Color::Rgb(140, 160, 200))
+                            .bg(thinking_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().bg(thinking_bg)),
+                    Span::styled(
+                        "─".repeat(80),
+                        Style::default()
+                            .fg(Color::Rgb(50, 52, 58))
+                            .bg(thinking_bg),
+                    ),
+                ]));
+                
+                // Thinking content with professional styling
+                for seg in wrap_preserve_lines(content, 95).into_iter() {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ", Style::default().bg(thinking_bg)),
+                        Span::styled(
+                            seg,
+                            Style::default()
+                                .fg(Color::Rgb(150, 160, 180))
+                                .bg(thinking_bg)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
+                
+                lines.push(Line::from(Span::styled(
+                    " ",
+                    Style::default().bg(thinking_bg),
+                )));
+                
+                ListItem::new(lines)
+            }
+            ChatMessage::Error(err) => {
+                let error_bg = Color::Rgb(32, 26, 26);
+                let mut lines = Vec::new();
+                
+                // Top spacing
+                lines.push(Line::from(Span::styled(" ", Style::default().bg(error_bg))));
+                
+                // Professional error header
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().bg(error_bg)),
+                    Span::styled(
+                        "ERROR",
+                        Style::default()
+                            .fg(Color::Rgb(220, 80, 80))
+                            .bg(error_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default().bg(error_bg)),
+                    Span::styled(
+                        "─".repeat(80),
+                        Style::default()
+                            .fg(Color::Rgb(60, 45, 45))
+                            .bg(error_bg),
+                    ),
+                ]));
+                
+                // Error message
+                for line in err.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ", Style::default().bg(error_bg)),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default()
+                                .fg(Color::Rgb(220, 140, 140))
+                                .bg(error_bg),
+                        ),
+                    ]));
+                }
+                
+                // Bottom spacing
+                lines.push(Line::from(Span::styled(" ", Style::default().bg(error_bg))));
+                
+                ListItem::new(lines)
+            },
         })
         .collect();
 
     let messages_len = messages.len();
 
-    if !app.user_scrolled && messages_len > 0 {
-        app.list_state.select(Some(messages_len.saturating_sub(1)));
-    } else if let Some(selected) = app.list_state.selected() {
-        if selected >= messages_len && messages_len > 0 {
+    if messages_len == 0 {
+        app.list_state.select(None);
+    } else {
+        let selected = app
+            .list_state
+            .selected()
+            .unwrap_or_else(|| messages_len.saturating_sub(1))
+            .min(messages_len.saturating_sub(1));
+
+        if app.user_scrolled {
+            app.list_state.select(Some(selected));
+        } else {
             app.list_state.select(Some(messages_len.saturating_sub(1)));
         }
-    } else if messages_len > 0 {
-        app.list_state.select(Some(messages_len.saturating_sub(1)));
     }
 
     let messages_list = List::new(messages)
@@ -694,8 +795,8 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     let mut scroll_state = app.scroll_state;
     let selected_idx = app.list_state.selected().unwrap_or(0);
     scroll_state = scroll_state
-        .content_length(app.chat_messages.len())
-        .position(selected_idx.saturating_sub(1));
+        .content_length(messages_len)
+        .position(selected_idx);
     f.render_stateful_widget(scrollbar, area, &mut scroll_state);
     app.scroll_state = scroll_state;
 }
@@ -704,7 +805,6 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.current_theme();
     let state = format!("{:?}", app.state);
     let title = format!(" Pengy Agent {} │ State: {} ", VERSION, state);
-    let _accent = agent_accent(app.selected_agent);
     let header = Paragraph::new(vec![Line::from(title), Line::from("")]).style(
         Style::default()
             .fg(theme.text)
@@ -715,6 +815,8 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
+    use unicode_width::UnicodeWidthChar;
+
     let theme = app.current_theme();
     let input_bg_color = theme.input_bg;
     let accent = agent_accent(app.selected_agent);
@@ -737,15 +839,65 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
         .saturating_sub(gutter_width + prompt.len() as u16);
 
     let prompt = "> ";
-    let wrapped = textwrap::wrap(app.chat_input.as_str(), (available_width as usize).max(1));
+    let wrap_width = (available_width as usize).max(1);
+
+    // Wrap text manually so trailing spaces are preserved and cursor math stays correct.
+    let mut lines: Vec<String> = vec![String::new()];
+    let mut line_widths: Vec<usize> = vec![0];
+    let mut cursor_line: usize = 0;
+    let mut cursor_col_width: usize = 0;
+    let total_chars = app.chat_input.chars().count();
+
+    if app.input_cursor == 0 {
+        cursor_line = 0;
+        cursor_col_width = 0;
+    }
+
+    for (idx, ch) in app.chat_input.chars().enumerate() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(1);
+
+        if ch == '\n' {
+            lines.push(String::new());
+            line_widths.push(0);
+            if idx + 1 == app.input_cursor {
+                cursor_line = lines.len().saturating_sub(1);
+                cursor_col_width = 0;
+            }
+            continue;
+        }
+
+        let current_width = *line_widths.last().unwrap();
+        if current_width + ch_width > wrap_width {
+            lines.push(String::new());
+            line_widths.push(0);
+        }
+
+        lines.last_mut().unwrap().push(ch);
+        *line_widths.last_mut().unwrap() += ch_width;
+
+        if idx + 1 == app.input_cursor {
+            cursor_line = lines.len().saturating_sub(1);
+            cursor_col_width = *line_widths.last().unwrap();
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+        line_widths.push(0);
+    }
+
+    if app.input_cursor >= total_chars {
+        cursor_line = lines.len().saturating_sub(1);
+        cursor_col_width = *line_widths.last().unwrap_or(&0);
+    }
 
     // Only show the tail that fits in the available height
     let available_height = inner_area.height as usize;
-    let start_idx = wrapped
+    let start_idx = lines
         .len()
         .saturating_sub(available_height)
-        .min(wrapped.len());
-    let visible = &wrapped[start_idx..];
+        .min(lines.len());
+    let visible = &lines[start_idx..];
 
     let mut input_content = Vec::new();
 
@@ -779,33 +931,15 @@ fn render_input(f: &mut Frame, app: &mut App, area: Rect) {
     let input_paragraph = Paragraph::new(input_content);
     f.render_widget(input_paragraph, inner_area);
 
-    let mut char_count = 0;
-    let mut cursor_line = 0;
-    let mut cursor_col = 0;
-
-    for (line_idx, line) in wrapped.iter().enumerate() {
-        if char_count + line.len() >= app.input_cursor {
-            cursor_line = line_idx;
-            cursor_col = app.input_cursor - char_count;
-            break;
-        }
-        char_count += line.len();
-    }
-
-    if cursor_line >= wrapped.len() && !wrapped.is_empty() {
-        cursor_line = wrapped.len() - 1;
-        cursor_col = wrapped[cursor_line].len();
-    }
-
     // Adjust cursor_line relative to visible slice
     if cursor_line < start_idx {
         cursor_line = start_idx;
-        cursor_col = 0;
+        cursor_col_width = 0;
     }
     let visible_line = cursor_line.saturating_sub(start_idx);
 
     let prefix_len = if visible_line == 0 { prompt.len() } else { 2 };
-    let cursor_x = (inner_area.x + gutter_width + prefix_len as u16 + cursor_col as u16)
+    let cursor_x = (inner_area.x + gutter_width + prefix_len as u16 + cursor_col_width as u16)
         .min(inner_area.x + inner_area.width.saturating_sub(1));
     let cursor_y = inner_area.y + visible_line as u16;
     f.set_cursor_position((cursor_x, cursor_y));
@@ -816,81 +950,59 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let model_name = app
         .selected_model
         .as_ref()
-        .map(|m| m.name.clone())
+        .map(|m| {
+            // Truncate long model names
+            let name = m.name.clone();
+            if name.len() > 30 {
+                format!("{}…", &name[..29])
+            } else {
+                name
+            }
+        })
         .unwrap_or_else(|| "None".to_string());
+    
     let agent_name = format!("{:?}", app.selected_agent);
+    
     let loading = if app.loading {
-        "● Running"
+        "Running"
     } else {
-        "● Idle"
+        "Idle"
     };
-    let accent = agent_accent(app.selected_agent);
+    
+    let loading_color = if app.loading {
+        Color::Rgb(200, 160, 80)
+    } else {
+        Color::Rgb(100, 180, 120)
+    };
+    
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .to_string_lossy()
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(".")
         .to_string();
-    let tokens = app.last_token_usage.as_ref().map(|(p, c, t)| {
-        let pct = if MAX_TOKENS > 0 {
-            ((*t as f64) / (MAX_TOKENS as f64) * 100.0).min(999.9)
-        } else {
-            0.0
-        };
-        format!(" │ Tokens: {}/{}/{} ({:.1}%)", p, c, t, pct)
-    }).unwrap_or_else(|| "".to_string());
-    let left = format!(" {} │ Model: {} │ Agent: {} │ {}", cwd, model_name, agent_name, loading);
-    let right = tokens;
-    let total_width = area.width as usize;
-    let left_len = left.len();
-    let right_len = right.len();
-    let padding = if total_width > left_len + right_len {
-        total_width - left_len - right_len
-    } else {
-        1
-    };
-    let pad_str = " ".repeat(padding);
+    
     let status_line = Line::from(vec![
-        Span::styled(left, Style::default().fg(Color::Rgb(170, 170, 170))),
-        Span::raw(pad_str),
-        Span::styled(right, Style::default().fg(Color::Rgb(170, 170, 170))),
+        Span::styled(" ", Style::default()),
+        Span::styled(cwd, Style::default().fg(Color::Rgb(140, 140, 160))),
+        Span::styled(" │ ", Style::default().fg(Color::Rgb(80, 80, 100))),
+        Span::styled("Model: ", Style::default().fg(Color::Rgb(120, 120, 140))),
+        Span::styled(model_name, Style::default().fg(Color::Rgb(180, 180, 200))),
+        Span::styled(" │ ", Style::default().fg(Color::Rgb(80, 80, 100))),
+        Span::styled("Agent: ", Style::default().fg(Color::Rgb(120, 120, 140))),
+        Span::styled(agent_name, Style::default().fg(Color::Rgb(180, 180, 200))),
+        Span::styled(" │ ", Style::default().fg(Color::Rgb(80, 80, 100))),
+        Span::styled(
+            loading,
+            Style::default()
+                .fg(loading_color)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]);
+    
     let status = Paragraph::new(vec![status_line, Line::from("")])
         .style(Style::default().bg(theme.status_bg));
     f.render_widget(status, area);
-}
-
-fn render_chat_panel(f: &mut Frame, app: &App, area: Rect) {
-    let commands = vec![
-        "/models - Select Model",
-        "/agents - Select Agent",
-        "/settings - API key / model / base URL",
-        "/help - Help",
-        "/clear - Reset conversation",
-    ];
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(Span::styled(
-        "Shortcuts",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    )));
-    for c in commands {
-        lines.push(Line::from(Span::styled(
-            c,
-            Style::default().fg(Color::Gray),
-        )));
-    }
-
-    if app.loading {
-        lines.push(Line::from(Span::styled(
-            "Status: running...",
-            Style::default().fg(Color::Yellow),
-        )));
-    }
-
-    let block = Block::default().borders(Borders::ALL).title("Panel");
-    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
-    f.render_widget(Clear, area);
-    f.render_widget(p, area);
 }
 
 fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
@@ -899,75 +1011,131 @@ fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(7),
             Constraint::Min(5),
-            Constraint::Length(2),
-            Constraint::Length(3),
-            Constraint::Min(0),
+            Constraint::Length(6),
         ])
         .split(area);
 
-    let title = Paragraph::new("Modified Files").style(
-        Style::default()
-            .fg(Color::Rgb(200, 200, 200))
-            .add_modifier(Modifier::BOLD),
-    );
-    f.render_widget(title, vertical[0]);
+    // Token usage panel
+    let token_block = Block::default()
+        .borders(Borders::ALL)
+        .title("Token Usage");
+    
+    let mut token_lines: Vec<Line> = Vec::new();
+    if let Some((prompt, completion, total)) = app.last_token_usage {
+        let pct = if MAX_TOKENS > 0 {
+            ((total as f64) / (MAX_TOKENS as f64) * 100.0).min(999.9)
+        } else {
+            0.0
+        };
+        
+        token_lines.push(Line::from(vec![
+            Span::styled("Prompt:     ", Style::default().fg(Color::Rgb(120, 120, 140))),
+            Span::styled(
+                format!("{}", prompt),
+                Style::default().fg(Color::Rgb(180, 180, 200)),
+            ),
+        ]));
+        token_lines.push(Line::from(vec![
+            Span::styled("Completion: ", Style::default().fg(Color::Rgb(120, 120, 140))),
+            Span::styled(
+                format!("{}", completion),
+                Style::default().fg(Color::Rgb(180, 180, 200)),
+            ),
+        ]));
+        token_lines.push(Line::from(vec![
+            Span::styled("Total:      ", Style::default().fg(Color::Rgb(120, 120, 140))),
+            Span::styled(
+                format!("{} ({:.1}%)", total, pct),
+                Style::default()
+                    .fg(Color::Rgb(200, 200, 220))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    } else {
+        token_lines.push(Line::from(Span::styled(
+            "No usage data yet",
+            Style::default().fg(Color::Rgb(100, 100, 120)),
+        )));
+    }
+    
+    let token_para = Paragraph::new(token_lines).block(token_block);
+    f.render_widget(token_para, vertical[0]);
 
+    // Modified files panel
     if !app.modified_files.is_empty() {
         let mut file_items: Vec<Line> = Vec::new();
-        for (file_path, (added, removed)) in app.modified_files.iter() {
+        for (file_path, (_added, _removed)) in app.modified_files.iter() {
             let file_name = file_path
                 .rsplit('/')
                 .next()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| file_path.clone());
+            
+            // Truncate long filenames
+            let display_name = if file_name.len() > 18 {
+                format!("{}…", &file_name[..17])
+            } else {
+                file_name
+            };
+            
             file_items.push(Line::from(vec![
-                Span::styled(file_name, Style::default().fg(Color::White)),
-                Span::raw(" "),
                 Span::styled(
-                    format!("+{}", added),
-                    Style::default().fg(Color::LightGreen),
-                ),
-                Span::raw(" "),
-                Span::styled(
-                    format!("-{}", removed),
-                    Style::default().fg(Color::LightRed),
+                    display_name,
+                    Style::default().fg(Color::Rgb(180, 180, 200)),
                 ),
             ]));
         }
 
-        let file_block = Block::default().borders(Borders::ALL).title("Files");
+        let file_block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!("Modified ({} files)", app.modified_files.len()));
         let file_list = List::new(file_items).block(file_block);
         f.render_widget(file_list, vertical[1]);
     } else {
-        let empty_block = Block::default().borders(Borders::ALL).title("Files");
-        let empty = Paragraph::new("No edits yet").block(empty_block);
-        f.render_widget(empty, vertical[1]);
+        let empty_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Modified Files");
+        let empty = Paragraph::new("No changes yet")
+            .style(Style::default().fg(Color::Rgb(100, 100, 120)));
+        f.render_widget(empty.block(empty_block), vertical[1]);
     }
 
-    let session_block = Block::default().borders(Borders::ALL).title("Context");
+    // Session info panel
+    let session_block = Block::default()
+        .borders(Borders::ALL)
+        .title("Session");
     let mut context_lines: Vec<Line> = Vec::new();
+    
+    let session_name = app.sessions
+        .get(app.current_session)
+        .cloned()
+        .unwrap_or_else(|| "New".to_string());
+    
+    let truncated_session = if session_name.len() > 18 {
+        format!("{}…", &session_name[..17])
+    } else {
+        session_name
+    };
+    
     context_lines.push(Line::from(vec![
-        Span::styled("Session: ", Style::default().fg(Color::Gray)),
+        Span::styled("Name: ", Style::default().fg(Color::Rgb(120, 120, 140))),
         Span::styled(
-            app.sessions
-                .get(app.current_session)
-                .cloned()
-                .unwrap_or_else(|| "New session - default".to_string()),
-            Style::default().fg(Color::White),
+            truncated_session,
+            Style::default().fg(Color::Rgb(180, 180, 200)),
         ),
     ]));
     context_lines.push(Line::from(vec![
-        Span::styled("State: ", Style::default().fg(Color::Gray)),
+        Span::styled("Messages: ", Style::default().fg(Color::Rgb(120, 120, 140))),
         Span::styled(
-            format!("{:?}", app.state),
-            Style::default().fg(Color::White),
+            format!("{}", app.chat_messages.len()),
+            Style::default().fg(Color::Rgb(180, 180, 200)),
         ),
     ]));
 
     let context_para = Paragraph::new(context_lines).block(session_block);
-    f.render_widget(context_para, vertical[3]);
+    f.render_widget(context_para, vertical[2]);
 }
 
 fn render_welcome(f: &mut Frame, app: &App, area: Rect) {
@@ -1632,39 +1800,27 @@ fn render_custom_model(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Custom Model");
 
+    // Only the name is edited here; base URL follows the current settings/base URL.
+    app.custom_model_field = 0;
+
     let err_msg = if let Some(ref e) = app.error {
         format!("\n\nError: {}", e)
     } else {
         String::new()
     };
 
-    let name_label = if app.custom_model_field == 0 {
-        "> Name: "
-    } else {
-        "  Name: "
-    };
-    let url_label = if app.custom_model_field == 1 {
-        "> Base URL: "
-    } else {
-        "  Base URL: "
-    };
+    let name_label = "> Name: ";
 
     let text = format!(
-        "{}{}\n{}{}\n(Tab to switch, Enter save){}",
-        name_label, app.custom_model_name, url_label, app.custom_base_url, err_msg
+        "{}{}\n(Enter to save, Esc back){}",
+        name_label, app.custom_model_name, err_msg
     );
 
     let p = Paragraph::new(text).block(block);
     f.render_widget(p, rect);
 
-    let (active_label, active_value, line_offset) = if app.custom_model_field == 0 {
-        (name_label, &app.custom_model_name, 1)
-    } else {
-        (url_label, &app.custom_base_url, 2)
-    };
-
-    let cursor_x = (rect.x + 1 + (active_label.len() + active_value.len()) as u16)
+    let cursor_x = (rect.x + 1 + (name_label.len() + app.custom_model_name.len()) as u16)
         .min(rect.x + rect.width.saturating_sub(1));
-    let cursor_y = rect.y + line_offset;
+    let cursor_y = rect.y + 1;
     f.set_cursor_position((cursor_x, cursor_y));
 }
