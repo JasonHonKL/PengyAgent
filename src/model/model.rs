@@ -287,11 +287,11 @@ pub mod model {
             }
         }
 
-        pub async fn complete(
-            &self,
-            mut messages: Vec<Message>,
-            tools: Option<&[Box<dyn tool::ToolCall>]>,
-        ) -> Result<Vec<Message>, Box<dyn Error + Send + Sync>> {
+    pub async fn complete(
+        &self,
+        mut messages: Vec<Message>,
+        tools: Option<&[Box<dyn tool::ToolCall>]>,
+    ) -> Result<(Vec<Message>, Option<ResponseUsage>), Box<dyn Error + Send + Sync>> {
             // Retry logic: try up to 3 times for connection errors
             const MAX_RETRIES: u32 = 3;
             let mut retry_count = 0;
@@ -394,6 +394,7 @@ pub mod model {
                 };
 
                 // Successfully got response - process it
+                let usage = Some(response_json.usage.clone());
                 // Extract content from the first choice
                 if let Some(choice) = response_json.choices.first() {
                     let reasoning_from_response = choice.message.reasoning_content.clone();
@@ -512,7 +513,7 @@ pub mod model {
                             }
                         }
                         // Return messages so far (will need another completion call to get final response)
-                        return Ok(messages);
+                        return Ok((messages, usage));
                     } else if let Some(content) = &choice.message.content {
                         // Regular response with content
                         let mut assistant_msg = Message::new(Role::Assistant, content.clone());
@@ -523,7 +524,7 @@ pub mod model {
                             assistant_msg.reasoning_content = reasoning_from_response;
                         }
                         messages.push(assistant_msg);
-                        return Ok(messages);
+                        return Ok((messages, usage));
                     }
                 }
 
@@ -786,7 +787,8 @@ pub mod model {
             // Note: This will fail without a valid API key, but tests the structure
             let result = model
                 .complete(messages.clone(), None as Option<&[Box<dyn tool::ToolCall>]>)
-                .await;
+                .await
+                .map(|(msgs, _)| msgs);
             dbg!(&result);
 
             match &result {
@@ -929,7 +931,8 @@ pub mod model {
             // Also test the complete method
             let result = model
                 .complete(messages.clone(), tools.as_ref().map(|t| t.as_slice()))
-                .await;
+                .await
+                .map(|(msgs, _)| msgs);
 
             match &result {
                 Ok(messages) => {
@@ -944,7 +947,8 @@ pub mod model {
                         println!("Making follow-up completion call with tool results...");
                         let final_result = model
                             .complete(messages.clone(), tools.as_ref().map(|t| t.as_slice()))
-                            .await;
+                            .await
+                            .map(|(msgs, _)| msgs);
                         match &final_result {
                             Ok(final_messages) => {
                                 println!("Final response messages:");

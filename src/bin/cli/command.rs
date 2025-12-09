@@ -2,6 +2,7 @@ use crate::app::{AgentType, App};
 use crate::constants::DEFAULT_BASE_URL;
 use pengy_agent::agent::agent::agent::AgentEvent;
 use pengy_agent::agent::code_researcher::code_researcher::create_code_researcher_agent;
+use pengy_agent::agent::chat_agent::chat_agent::create_chat_agent;
 use pengy_agent::agent::coder::coder::create_coder_agent;
 use pengy_agent::agent::control_agent::control_agent::create_control_agent;
 use pengy_agent::agent::issue_agent::issue_agent::create_issue_agent;
@@ -142,6 +143,16 @@ pub(crate) async fn run_cmd_mode(
         AgentEvent::ToolResult { result } => {
             println!("[Tool Result] {}", result);
         }
+        AgentEvent::TokenUsage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+        } => {
+            println!(
+                "[Usage] prompt: {:?}, completion: {:?}, total: {:?}",
+                prompt_tokens, completion_tokens, total_tokens
+            );
+        }
         AgentEvent::Thinking { content } => {
             println!("[Thinking] {}", content);
         }
@@ -173,6 +184,10 @@ pub(crate) async fn run_cmd_mode(
         }
         AgentType::Coder => {
             let mut agent = create_coder_agent(model, None, Some(3), Some(50));
+            agent.run(prompt, callback).await;
+        }
+        AgentType::ChatAgent => {
+            let mut agent = create_chat_agent(model, None, Some(3), Some(50));
             agent.run(prompt, callback).await;
         }
         AgentType::CodeResearcher => {

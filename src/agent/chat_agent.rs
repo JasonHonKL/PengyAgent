@@ -2,12 +2,12 @@ pub mod chat_agent {
     use crate::{
         agent::agent::agent::Agent,
         model::model::model::Model,
+        prompt::chat::chat_system_prompt,
         tool::{
             docs_reader::docs_reader::DocsReaderTool,
             end::end::EndTool,
             grep::grep::GrepTool,
-            summarizer::{self, summarizer::SummarizerTool},
-            todo,
+            summarizer::summarizer::SummarizerTool,
             tool::tool::ToolCall,
         },
     };
@@ -30,6 +30,14 @@ pub mod chat_agent {
             Box::new(end_tool),
         ];
 
-        todo!("Implement chat agent");
+        let current_dir = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .to_string_lossy()
+            .to_string();
+        let default_prompt = chat_system_prompt(&current_dir);
+        let final_system_prompt = system_prompt.unwrap_or(default_prompt);
+
+        // Read-only agent: tools above cannot modify files. This agent is for discussion and code navigation only.
+        Agent::new(model, tools, final_system_prompt, max_retry, max_step)
     }
 }

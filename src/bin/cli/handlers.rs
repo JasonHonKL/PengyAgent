@@ -237,6 +237,14 @@ pub(crate) fn handle_command_inline(app: &mut App, cmd: &str, previous_state: Ap
         }
         app.session_dirty = true;
         app.save_current_session();
+    } else if cmd.starts_with("/theme") {
+        app.previous_state = Some(previous_state);
+        app.state = AppState::ThemeSelector;
+        let themes_len = crate::theme::THEMES.len();
+        let idx = app.theme_index.min(themes_len.saturating_sub(1));
+        app.theme_list_state.select(Some(idx));
+        app.theme_search_query.clear();
+        app.theme_search_focused = false;
     }
     app.chat_input.clear();
     app.input_cursor = 0;

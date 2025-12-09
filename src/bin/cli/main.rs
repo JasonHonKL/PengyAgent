@@ -2,6 +2,8 @@ mod app;
 mod command;
 mod constants;
 mod handlers;
+mod theme;
+mod theme_select;
 mod ui;
 
 use app::{App, AppState, ModelOption};
@@ -373,6 +375,82 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 };
                                 if !filtered.is_empty() {
                                     app.model_list_state.select(Some(0));
+                                }
+                            }
+                            _ => {}
+                        }
+                        false
+                    }
+                    AppState::ThemeSelector => {
+                        let filtered = app.filtered_themes();
+                        match key.code {
+                            KeyCode::Esc => {
+                                app.state = app.previous_state.clone().unwrap_or(AppState::Welcome);
+                                app.theme_search_focused = false;
+                                app.theme_search_query.clear();
+                            }
+                            KeyCode::Tab => {
+                                app.theme_search_focused = !app.theme_search_focused;
+                                if !app.theme_search_focused {
+                                    if !crate::theme::THEMES.is_empty() {
+                                        app.theme_list_state.select(Some(0));
+                                    }
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if app.theme_search_focused {
+                                    app.theme_search_focused = false;
+                                } else if let Some(sel) = app.theme_list_state.selected() {
+                                    if let Some((actual_idx, _)) = filtered.get(sel) {
+                                        app.theme_index = *actual_idx;
+                                        let _ = app.save_config();
+                                        app.state =
+                                            app.previous_state.clone().unwrap_or(AppState::Welcome);
+                                    }
+                                }
+                            }
+                            KeyCode::Up => {
+                                if !app.theme_search_focused {
+                                    let i = app.theme_list_state.selected().unwrap_or(0).saturating_sub(1);
+                                    let new_sel = if filtered.is_empty() {
+                                        0
+                                    } else {
+                                        i.min(filtered.len().saturating_sub(1))
+                                    };
+                                    app.theme_list_state.select(Some(new_sel));
+                                    if let Some((actual_idx, _)) = filtered.get(new_sel) {
+                                        app.theme_index = *actual_idx;
+                                    }
+                                }
+                            }
+                            KeyCode::Down => {
+                                if !app.theme_search_focused {
+                                    let i = app.theme_list_state.selected().unwrap_or(0) + 1;
+                                    let new_sel = if filtered.is_empty() {
+                                        0
+                                    } else {
+                                        i.min(filtered.len().saturating_sub(1))
+                                    };
+                                    app.theme_list_state.select(Some(new_sel));
+                                    if let Some((actual_idx, _)) = filtered.get(new_sel) {
+                                        app.theme_index = *actual_idx;
+                                    }
+                                }
+                            }
+                            KeyCode::Char(c) if app.theme_search_focused => {
+                                app.theme_search_query.push(c);
+                                let filtered = app.filtered_themes();
+                                if !filtered.is_empty() {
+                                    app.theme_list_state.select(Some(0));
+                                    app.theme_index = filtered[0].0;
+                                }
+                            }
+                            KeyCode::Backspace if app.theme_search_focused => {
+                                app.theme_search_query.pop();
+                                let filtered = app.filtered_themes();
+                                if !filtered.is_empty() {
+                                    app.theme_list_state.select(Some(0));
+                                    app.theme_index = filtered[0].0;
                                 }
                             }
                             _ => {}

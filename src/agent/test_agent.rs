@@ -5,6 +5,7 @@ pub mod test_agent {
     use crate::tool::docs_researcher::docs_researcher::DocsResearcherTool;
     use crate::tool::edit::edit::EditTool;
     use crate::tool::end::end::EndTool;
+    use crate::tool::find_replace::find_replace::FindReplaceTool;
     use crate::tool::grep::grep::GrepTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
     use crate::tool::todo::todo::TodoTool;
@@ -15,6 +16,7 @@ pub mod test_agent {
     /// - bash: Execute bash commands in a persistent shell session
     /// - docs_researcher: Manage documents in the 'pengy_docs' folder (create, read, search)
     /// - edit: Modify existing files using exact string replacements
+    /// - find_replace: Find and replace exact text within a file
     /// - grep: Search file contents using regular expressions
     /// - todo: Manage a todo list (read, insert, tick, delete tasks)
     /// - web: Fetch content from URLs using HTTP/HTTPS
@@ -32,6 +34,7 @@ pub mod test_agent {
         let bash_tool = BashTool::new();
         let docs_researcher_tool = DocsResearcherTool::new();
         let edit_tool = EditTool::new();
+        let find_replace_tool = FindReplaceTool::new();
         let grep_tool = GrepTool::new();
         let todo_tool = TodoTool::new();
         let web_tool = WebTool::new();
@@ -43,6 +46,7 @@ pub mod test_agent {
             Box::new(bash_tool),
             Box::new(docs_researcher_tool),
             Box::new(edit_tool),
+            Box::new(find_replace_tool),
             Box::new(grep_tool),
             Box::new(todo_tool),
             Box::new(web_tool),

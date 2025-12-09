@@ -6,6 +6,7 @@ pub mod code_researcher {
     use crate::tool::docs_researcher::docs_researcher::DocsResearcherTool;
     use crate::tool::edit::edit::EditTool;
     use crate::tool::end::end::EndTool;
+    use crate::tool::find_replace::find_replace::FindReplaceTool;
     use crate::tool::grep::grep::GrepTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
     use crate::tool::todo::todo::TodoTool;
@@ -19,6 +20,7 @@ pub mod code_researcher {
     /// - docs_researcher: Manage documents in the 'pengy_docs' folder (create, read, search)
     /// - docs_reader: Read text content from PDF documents
     /// - edit: Modify existing files using exact string replacements
+    /// - find_replace: Find and replace exact text within a file
     /// - todo: Manage a todo list (read, insert, tick, delete tasks)
     /// - vector_search: Perform semantic vector search across multiple text files
     /// - web: Fetch content from URLs using HTTP/HTTPS
@@ -41,6 +43,7 @@ pub mod code_researcher {
         let docs_researcher_tool = DocsResearcherTool::new();
         let docs_reader_tool = DocsReaderTool::new();
         let edit_tool = EditTool::new();
+        let find_replace_tool = FindReplaceTool::new();
         let todo_tool = TodoTool::new();
 
         // Vector search tool requires API credentials
@@ -60,6 +63,7 @@ pub mod code_researcher {
             Box::new(docs_researcher_tool),
             Box::new(docs_reader_tool),
             Box::new(edit_tool),
+            Box::new(find_replace_tool),
             Box::new(todo_tool),
             Box::new(vector_search_tool),
             Box::new(web_tool),

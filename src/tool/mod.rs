@@ -9,6 +9,7 @@ pub mod docs_researcher;
 pub mod edit;
 pub mod end;
 pub mod file_manager;
+pub mod find_replace;
 pub mod github_tool;
 pub mod grep;
 pub mod summarizer;

@@ -4,6 +4,7 @@ pub mod pengy_agent {
     use crate::agent::coder::coder::create_coder_agent;
     use crate::agent::test_agent::test_agent::create_test_agent;
     use crate::model::model::model::{Message, Model, Role};
+    use crate::prompt::pengy::{implementation_prompt, research_prompt, testing_prompt};
 
     /// Helper function to extract the final response from an agent's messages
     fn extract_final_response(messages: &[Message]) -> Option<String> {
@@ -44,24 +45,7 @@ pub mod pengy_agent {
         callback(AgentEvent::Thinking {
             content: "=== PHASE 1: Code Research ===".to_string(),
         });
-        let research_prompt = {
-            let mut prompt = if user_request.trim().is_empty() {
-                "Research the codebase and generate a comprehensive research report. Analyze the architecture, key components, code patterns, dependencies, and provide recommendations for implementation.".to_string()
-            } else {
-                format!(
-                    "Research the codebase based on the following user request and generate a comprehensive research report:\n{}\n\nAnalyze the architecture, key components, code patterns, dependencies, and provide recommendations for implementation.",
-                    user_request
-                )
-            };
-
-            if let Some(history) = &conversation_history {
-                prompt.push_str(
-                    "\n\nConversation history (include relevant context in your research):\n",
-                );
-                prompt.push_str(history);
-            }
-            prompt
-        };
+        let research_prompt = research_prompt(&user_request, conversation_history.as_deref());
 
         let mut researcher_agent = create_code_researcher_agent(
             model.clone(),
@@ -89,25 +73,8 @@ pub mod pengy_agent {
         callback(AgentEvent::Thinking {
             content: "=== PHASE 2: Code Implementation ===".to_string(),
         });
-        let implementation_prompt = {
-            let mut prompt = if user_request.trim().is_empty() {
-                format!(
-                    "Based on the following research report, implement the necessary code:\n\n{}\n\nPlease implement the code according to the recommendations in the research report.",
-                    research_report
-                )
-            } else {
-                format!(
-                    "Based on the following research report and user request, implement the necessary code:\n\nUser Request: {}\n\nResearch Report:\n{}\n\nPlease implement the code according to the research report and user request.",
-                    user_request, research_report
-                )
-            };
-
-            if let Some(history) = &conversation_history {
-                prompt.push_str("\n\nConversation history (consider relevant prior context):\n");
-                prompt.push_str(history);
-            }
-            prompt
-        };
+        let implementation_prompt =
+            implementation_prompt(&user_request, &research_report, conversation_history.as_deref());
 
         let mut coder_agent = create_coder_agent(
             model.clone(),
@@ -132,18 +99,12 @@ pub mod pengy_agent {
         callback(AgentEvent::Thinking {
             content: "=== PHASE 3: Testing ===".to_string(),
         });
-        let testing_prompt = {
-            let mut prompt = format!(
-                "Test the code that was just implemented. Based on the user request, research report, and implementation, create comprehensive test cases:\n\nUser Request:\n{}\n\nResearch Report:\n{}\n\nImplementation Summary:\n{}\n\nPlease create test cases in the test folder (create it if it doesn't exist) and verify that the implemented code works correctly.",
-                user_request, research_report, implementation_summary
-            );
-
-            if let Some(history) = &conversation_history {
-                prompt.push_str("\n\nConversation history (consider relevant prior context):\n");
-                prompt.push_str(history);
-            }
-            prompt
-        };
+        let testing_prompt = testing_prompt(
+            &user_request,
+            &research_report,
+            &implementation_summary,
+            conversation_history.as_deref(),
+        );
 
         let mut test_agent = create_test_agent(
             model.clone(),

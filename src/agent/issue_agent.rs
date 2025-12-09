@@ -4,6 +4,7 @@ pub mod issue_agent {
     use crate::tool::bash::bash::BashTool;
     use crate::tool::edit::edit::EditTool;
     use crate::tool::end::end::EndTool;
+    use crate::tool::find_replace::find_replace::FindReplaceTool;
     use crate::tool::github_tool::github_tool::GithubTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
     use crate::tool::todo::todo::TodoTool;
@@ -25,6 +26,7 @@ pub mod issue_agent {
         let todo_tool = TodoTool::new();
         let bash_tool = BashTool::new();
         let edit_tool = EditTool::new();
+        let find_replace_tool = FindReplaceTool::new();
         let github_tool = GithubTool::new();
         let summarizer_tool = SummarizerTool::new();
         let end_tool = EndTool::new();
@@ -34,6 +36,7 @@ pub mod issue_agent {
             Box::new(todo_tool),
             Box::new(bash_tool),
             Box::new(edit_tool),
+            Box::new(find_replace_tool),
             Box::new(github_tool),
             Box::new(summarizer_tool),
             Box::new(end_tool),

@@ -8,6 +8,11 @@ pub mod agent {
         Step { step: u32, max_steps: u32 },
         ToolCall { tool_name: String, args: String },
         ToolResult { result: String },
+        TokenUsage {
+            prompt_tokens: Option<u32>,
+            completion_tokens: Option<u32>,
+            total_tokens: Option<u32>,
+        },
         Thinking { content: String },
         FinalResponse { content: String },
         Error { error: String },
@@ -167,7 +172,14 @@ pub mod agent {
                         .complete(self.messages.clone(), tools_slice)
                         .await
                     {
-                        Ok(messages) => {
+                        Ok((messages, usage)) => {
+                            if let Some(u) = usage.clone() {
+                                callback(AgentEvent::TokenUsage {
+                                    prompt_tokens: u.prompt_tokens,
+                                    completion_tokens: u.completion_tokens,
+                                    total_tokens: u.total_tokens,
+                                });
+                            }
                             // Check if we got tool calls or final response
                             // Look for tool call messages (they come in pairs: Assistant with "Tool call:" then User with "Tool result:")
                             let mut found_tool_call = false;
@@ -861,7 +873,8 @@ pub mod agent {
                     Message::new(Role::User, summary_prompt),
                 ];
 
-                let summary_response = self.model.complete(summary_messages, None).await?;
+                let (summary_response, _usage) =
+                    self.model.complete(summary_messages, None).await?;
 
                 // Extract summary from response
                 summary_response
