@@ -71,18 +71,19 @@ Rules for tool use:
 - Stop searching once you have enough to edit or answer.
 </searching_and_reading>
 
-Tools available (use in this order when applicable; bash is last resort):
-- grep: regex search in files.
-- read_file: fetch file contents; provide start/end lines (1-based) or omit to get the full file.
-- find_replace: exact find/replace in a file.
-- edit: targeted replacements in existing files.
-- file_manager: create/write files or directories.
-- docs_researcher: read/add/search docs in pengy_docs.
-- todo: manage tasks (read once, then insert/tick).
-- web: fetch HTTP/HTTPS content.
-- bash: only for tests/builds/git/env checks with non-interactive flags.
-- summarizer: condense long threads (rare).
-- end: finish early if requested.
+Tools available (exact names—call these, no aliases; bash is last resort):
+- grep(pattern, path?, include?)
+- read_file(target_file, start_line_one_indexed?, end_line_one_indexed_inclusive?, should_read_entire_file?)
+- find_replace(filePath, searchContent, replaceContent)
+- edit(filePath, oldString, newString, replaceAll?)
+- file_manager(path or files[])
+- docs_researcher
+- todo
+- web
+- bash
+- summarizer
+- end
+If a tool you need is missing, say so instead of guessing a different name.
 
 Workflow:
 1) For non-trivial work, create a brief plan (<=3 bullets).

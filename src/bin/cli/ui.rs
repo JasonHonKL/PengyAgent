@@ -262,6 +262,7 @@ fn render_tool_call_card(
     is_light_theme: bool,
 ) -> ListItem<'static> {
     let mut lines = Vec::new();
+    let parsed_args: Option<serde_json::Value> = serde_json::from_str(args).ok();
 
     // Professional status indicators with theme-aware backgrounds
     let (status_icon, status_fg, card_bg, code_bg) = match status {
@@ -348,7 +349,7 @@ fn render_tool_call_card(
 
     // Tool-specific summary - professional display
     if name == "edit" || name == "edit_file" {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+        if let Some(json) = parsed_args.as_ref() {
             let path = json
                 .get("filePath")
                 .and_then(|v| v.as_str())
@@ -395,7 +396,7 @@ fn render_tool_call_card(
             }
         }
     } else if name == "bash" || name == "run_terminal_cmd" {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+        if let Some(json) = parsed_args.as_ref() {
             if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()) {
                 let preview = if cmd.len() > 80 {
                     format!("{}…", &cmd[..79])
@@ -413,8 +414,12 @@ fn render_tool_call_card(
             }
         }
     } else if name == "read_file" {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
-            if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
+        if let Some(json) = parsed_args.as_ref() {
+            if let Some(path) = json
+                .get("target_file")
+                .or_else(|| json.get("path"))
+                .and_then(|v| v.as_str())
+            {
                 lines.push(Line::from(vec![
                     Span::styled("     ", Style::default()),
                     Span::styled(
@@ -429,7 +434,7 @@ fn render_tool_call_card(
             }
         }
     } else if name == "grep" || name == "grep_search" {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+        if let Some(json) = parsed_args.as_ref() {
             if let Some(pattern) = json.get("pattern").and_then(|v| v.as_str()) {
                 let preview = if pattern.len() > 60 {
                     format!("{}…", &pattern[..59])
@@ -450,7 +455,7 @@ fn render_tool_call_card(
             }
         }
     } else if name == "list_dir" {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+        if let Some(json) = parsed_args.as_ref() {
             if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
                 lines.push(Line::from(vec![
                     Span::styled("     ", Style::default()),
@@ -466,7 +471,7 @@ fn render_tool_call_card(
             }
         }
     } else if name == "file_manager" {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+        if let Some(json) = parsed_args.as_ref() {
             // Check if it's a batch operation
             if let Some(files_array) = json.get("files").and_then(|v| v.as_array()) {
                 lines.push(Line::from(vec![
@@ -668,6 +673,33 @@ fn render_tool_call_card(
         }
     }
 
+    // Detect language for result highlighting when we have a file path
+    let lang_hint = parsed_args.as_ref().and_then(|json| {
+        json.get("target_file")
+            .or_else(|| json.get("path"))
+            .and_then(|v| v.as_str())
+            .and_then(|path| {
+                let ext = path.rsplit('.').next().unwrap_or("");
+                match ext {
+                    "rs" => Some("rust"),
+                    "py" => Some("python"),
+                    "js" => Some("javascript"),
+                    "ts" | "tsx" => Some("typescript"),
+                    "jsx" => Some("javascript"),
+                    "go" => Some("go"),
+                    "java" => Some("java"),
+                    "c" | "h" => Some("c"),
+                    "cpp" | "cc" | "cxx" | "hpp" => Some("cpp"),
+                    "ml" | "mli" => Some("ocaml"),
+                    "json" => Some("json"),
+                    "toml" => Some("toml"),
+                    "yaml" | "yml" => Some("yaml"),
+                    "md" => Some("markdown"),
+                    _ => None,
+                }
+            })
+    });
+
     // Result section with professional styling
     if let Some(res) = result {
         let normalized = res.replace("\\r\\n", "\n").replace("\\n", "\n");
@@ -691,78 +723,121 @@ fn render_tool_call_card(
             let total_lines = result_lines.len();
             let display_limit = 12;
             let max_line_width = 90; // Max characters per line before wrapping
-            
-            let mut displayed_line_count = 0;
-            
-            for (original_idx, line) in result_lines.iter().enumerate() {
-                if displayed_line_count >= display_limit {
-                    break;
+
+            if name == "read_file" && lang_hint.is_some() {
+                let lang = lang_hint.unwrap_or("");
+                let mut displayed = 0;
+                for (idx, line) in result_lines.iter().take(display_limit).enumerate() {
+                    let (line_no, code_body) = if let Some(rest) = line.strip_prefix('L') {
+                        let mut parts = rest.splitn(2, ':');
+                        if let (Some(num), Some(body)) = (parts.next(), parts.next()) {
+                            (num.parse::<usize>().unwrap_or(idx + 1), body)
+                        } else {
+                            (idx + 1, *line)
+                        }
+                    } else {
+                        (idx + 1, *line)
+                    };
+
+                    let highlighted = highlight_code_line(code_body, lang, status_fg, code_bg);
+                    let mut line_spans = vec![
+                        Span::styled("       ", Style::default()),
+                        Span::styled(
+                            format!("{:>3} │ ", line_no),
+                            Style::default().fg(Color::Rgb(70, 70, 90)),
+                        ),
+                    ];
+                    for span in highlighted.spans.into_iter().skip(1) {
+                        line_spans.push(span);
+                    }
+                    lines.push(Line::from(line_spans));
+                    displayed += 1;
                 }
-                
-                // Wrap long lines
-                if line.len() > max_line_width {
-                    let mut remaining = *line;
-                    let mut is_first = true;
-                    
-                    while !remaining.is_empty() && displayed_line_count < display_limit {
-                        let chunk_end = max_line_width.min(remaining.len());
-                        let chunk = &remaining[..chunk_end];
-                        
-                        if !chunk.trim().is_empty() {
+
+                if total_lines > display_limit {
+                    lines.push(Line::from(vec![
+                        Span::styled("           ", Style::default()),
+                        Span::styled(
+                            format!("└─ {} more lines omitted", total_lines - displayed),
+                            Style::default()
+                                .fg(Color::Rgb(90, 90, 110))
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
+            } else {
+                let mut displayed_line_count = 0;
+
+                for (original_idx, line) in result_lines.iter().enumerate() {
+                    if displayed_line_count >= display_limit {
+                        break;
+                    }
+
+                    // Wrap long lines
+                    if line.len() > max_line_width {
+                        let mut remaining = *line;
+                        let mut is_first = true;
+
+                        while !remaining.is_empty() && displayed_line_count < display_limit {
+                            let chunk_end = max_line_width.min(remaining.len());
+                            let chunk = &remaining[..chunk_end];
+
+                            if !chunk.trim().is_empty() {
+                                lines.push(Line::from(vec![
+                                    Span::styled("       ", Style::default()),
+                                    Span::styled(
+                                        if is_first {
+                                            format!("{:>3} │ ", original_idx + 1)
+                                        } else {
+                                            "    │ ".to_string()
+                                        },
+                                        Style::default().fg(Color::Rgb(70, 70, 90)),
+                                    ),
+                                    Span::styled(chunk.to_string(), Style::default().fg(Color::Rgb(180, 180, 200))),
+                                ]));
+                            } else if is_first {
+                                lines.push(Line::from(Span::styled(
+                                    "           │",
+                                    Style::default().fg(Color::Rgb(70, 70, 90)),
+                                )));
+                            }
+
+                            is_first = false;
+                            remaining = &remaining[chunk_end..];
+                            displayed_line_count += 1;
+                        }
+                    } else {
+                        // Short line - display as is
+                        if !line.trim().is_empty() {
                             lines.push(Line::from(vec![
                                 Span::styled("       ", Style::default()),
                                 Span::styled(
-                                    if is_first {
-                                        format!("{:>3} │ ", original_idx + 1)
-                                    } else {
-                                        "    │ ".to_string()
-                                    },
+                                    format!("{:>3} │ ", original_idx + 1),
                                     Style::default().fg(Color::Rgb(70, 70, 90)),
                                 ),
-                                Span::styled(chunk.to_string(), Style::default().fg(Color::Rgb(180, 180, 200))),
+                                Span::styled(line.to_string(), Style::default().fg(Color::Rgb(180, 180, 200))),
                             ]));
-                        } else if is_first {
+                        } else {
                             lines.push(Line::from(Span::styled(
                                 "           │",
                                 Style::default().fg(Color::Rgb(70, 70, 90)),
                             )));
                         }
-                        
-                        is_first = false;
-                        remaining = &remaining[chunk_end..];
                         displayed_line_count += 1;
                     }
-                } else {
-                    // Short line - display as is
-                    if !line.trim().is_empty() {
-                        lines.push(Line::from(vec![
-                            Span::styled("       ", Style::default()),
-                            Span::styled(
-                                format!("{:>3} │ ", original_idx + 1),
-                                Style::default().fg(Color::Rgb(70, 70, 90)),
-                            ),
-                            Span::styled(line.to_string(), Style::default().fg(Color::Rgb(180, 180, 200))),
-                        ]));
-                    } else {
-                        lines.push(Line::from(Span::styled(
-                            "           │",
-                            Style::default().fg(Color::Rgb(70, 70, 90)),
-                        )));
-                    }
-                    displayed_line_count += 1;
                 }
-            }
 
-            if displayed_line_count >= display_limit && total_lines > display_limit {
-                lines.push(Line::from(vec![
-                    Span::styled("           ", Style::default()),
-                    Span::styled(
-                        format!("└─ {} more lines omitted", total_lines - displayed_line_count),
-                        Style::default()
-                            .fg(Color::Rgb(90, 90, 110))
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                ]));
+                if displayed_line_count >= display_limit && total_lines > display_limit {
+                    lines.push(Line::from(vec![
+                        Span::styled("           ", Style::default()),
+                        Span::styled(
+                            format!("└─ {} more lines omitted", total_lines - displayed_line_count),
+                            Style::default()
+                                .fg(Color::Rgb(90, 90, 110))
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
             }
         }
     }
