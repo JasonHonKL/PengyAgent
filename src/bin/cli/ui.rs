@@ -1,6 +1,7 @@
 use crate::app::{AgentType, App, AppState, ChatMessage, ModelOption, ToolStatus};
 use crate::constants::{DEFAULT_BASE_URL, MAX_TOKENS, VERSION};
 // Theme definitions are accessed via app.current_theme()
+use crate::syntax::highlight_line_with_tree_sitter;
 use crate::theme_select::render_theme_selector;
 use ratatui::{
     Frame,
@@ -13,19 +14,25 @@ use ratatui::{
 };
 use serde_json;
 use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
 
 fn wrap_to_width(text: &str, max: usize) -> Vec<String> {
-    if text.len() <= max {
+    if text.width() <= max {
         return vec![text.to_string()];
     }
     let mut lines = Vec::new();
     let mut current = String::new();
+    let mut current_width = 0;
+    
     for ch in text.chars() {
-        current.push(ch);
-        if current.len() >= max {
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+        if current_width + ch_width > max && !current.is_empty() {
             lines.push(current);
             current = String::new();
+            current_width = 0;
         }
+        current.push(ch);
+        current_width += ch_width;
     }
     if !current.is_empty() {
         lines.push(current);
@@ -87,24 +94,201 @@ fn keyword_set(lang: &str) -> HashSet<&'static str> {
     set
 }
 
-fn style_token(token: &str, lang: &str, accent: Color, bg: Color) -> Span<'static> {
-    let clean = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
-    let keywords = keyword_set(lang);
-    let base_style = Style::default().bg(bg).fg(Color::White);
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TokenType {
+    Comment,
+    String,
+    Number,
+    Keyword,
+    Operator,
+    Punctuation,
+    Identifier,
+    Whitespace,
+}
 
-    if token.trim_start().starts_with("//") || token.trim_start().starts_with("#") {
-        Span::styled(token.to_string(), base_style.fg(Color::Gray))
-    } else if token.starts_with('"') || token.starts_with('\'') {
-        Span::styled(token.to_string(), base_style.fg(Color::LightGreen))
-    } else if keywords.contains(clean) {
+fn tokenize_line(line: &str) -> Vec<(TokenType, String)> {
+    let mut tokens = Vec::new();
+    let mut chars = line.chars().peekable();
+    let mut current = String::new();
+    let mut in_string = false;
+    let mut string_char = '\0';
+    let mut in_comment = false;
+    let mut comment_type = ""; // "//" or "#" or "/*"
+
+    while let Some(ch) = chars.next() {
+        if in_comment {
+            current.push(ch);
+            if comment_type == "//" || comment_type == "#" {
+                // Single-line comment - continue until end of line
+                continue;
+            } else if comment_type == "/*" {
+                // Multi-line comment - check for closing
+                if current.ends_with("*/") {
+                    tokens.push((TokenType::Comment, current.clone()));
+                    current.clear();
+                    in_comment = false;
+                }
+                continue;
+            }
+        } else if in_string {
+            current.push(ch);
+            if ch == '\\' {
+                // Escape sequence - consume next char
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            } else if ch == string_char {
+                // End of string
+                tokens.push((TokenType::String, current.clone()));
+                current.clear();
+                in_string = false;
+            }
+        } else if ch == '/' && chars.peek() == Some(&'/') {
+            // Single-line comment
+            if !current.is_empty() {
+                tokens.push((TokenType::Identifier, current.clone()));
+                current.clear();
+            }
+            current.push(ch);
+            chars.next(); // consume '/'
+            current.push('/');
+            in_comment = true;
+            comment_type = "//";
+        } else if ch == '#' && current.is_empty() {
+            // Python/Shell comment
+            current.push(ch);
+            in_comment = true;
+            comment_type = "#";
+        } else if ch == '/' && chars.peek() == Some(&'*') {
+            // Multi-line comment start
+            if !current.is_empty() {
+                tokens.push((TokenType::Identifier, current.clone()));
+                current.clear();
+            }
+            current.push(ch);
+            chars.next(); // consume '*'
+            current.push('*');
+            in_comment = true;
+            comment_type = "/*";
+        } else if ch == '"' || ch == '\'' {
+            // String literal
+            if !current.is_empty() {
+                tokens.push((TokenType::Identifier, current.clone()));
+                current.clear();
+            }
+            current.push(ch);
+            in_string = true;
+            string_char = ch;
+        } else if ch.is_whitespace() {
+            if !current.is_empty() {
+                // Determine token type for current
+                let token_str = current.clone();
+                if token_str.chars().all(|c| c.is_ascii_digit() || c == '.' || c == 'x' || c == 'X' || c.is_ascii_hexdigit()) {
+                    tokens.push((TokenType::Number, token_str));
+                } else {
+                    tokens.push((TokenType::Identifier, token_str));
+                }
+                current.clear();
+            }
+            tokens.push((TokenType::Whitespace, ch.to_string()));
+        } else if is_operator(ch) {
+            if !current.is_empty() {
+                tokens.push((TokenType::Identifier, current.clone()));
+                current.clear();
+            }
+            // Check for multi-character operators
+            let mut op = ch.to_string();
+            if let Some(&next) = chars.peek() {
+                let two_char = format!("{}{}", ch, next);
+                if is_two_char_operator(&two_char) {
+                    op = two_char.clone();
+                    chars.next();
+                }
+            }
+            tokens.push((TokenType::Operator, op));
+        } else if is_punctuation(ch) {
+            if !current.is_empty() {
+                tokens.push((TokenType::Identifier, current.clone()));
+                current.clear();
+            }
+            tokens.push((TokenType::Punctuation, ch.to_string()));
+        } else {
+            current.push(ch);
+        }
+    }
+
+    // Handle remaining token
+    if !current.is_empty() {
+        if in_comment {
+            tokens.push((TokenType::Comment, current));
+        } else if in_string {
+            tokens.push((TokenType::String, current));
+        } else {
+            let token_str = current;
+            if token_str.chars().all(|c| c.is_ascii_digit() || c == '.' || c == 'x' || c == 'X' || c.is_ascii_hexdigit()) {
+                tokens.push((TokenType::Number, token_str));
+            } else {
+                tokens.push((TokenType::Identifier, token_str));
+            }
+        }
+    }
+
+    tokens
+}
+
+fn is_operator(ch: char) -> bool {
+    matches!(ch, '+' | '-' | '*' | '/' | '%' | '=' | '!' | '<' | '>' | '&' | '|' | '^' | '~' | '?')
+}
+
+fn is_two_char_operator(op: &str) -> bool {
+    matches!(op, "==" | "!=" | "<=" | ">=" | "++" | "--" | "+=" | "-=" | "*=" | "/=" | "%=" | "&&" | "||" | "<<" | ">>" | "::" | "->" | "=>")
+}
+
+fn is_punctuation(ch: char) -> bool {
+    matches!(ch, '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | ':' | '.' | '?')
+}
+
+fn style_token(token_type: TokenType, token: &str, lang: &str, accent: Color, bg: Color) -> Span<'static> {
+    let base_style = Style::default().bg(bg);
+    
+    match token_type {
+        TokenType::Comment => {
+            Span::styled(token.to_string(), base_style.fg(Color::Rgb(100, 100, 120)))
+        }
+        TokenType::String => {
+            Span::styled(token.to_string(), base_style.fg(Color::Rgb(150, 200, 150)))
+        }
+        TokenType::Number => {
+            Span::styled(token.to_string(), base_style.fg(Color::Rgb(180, 200, 255)))
+        }
+        TokenType::Keyword => {
         Span::styled(
             token.to_string(),
             base_style.fg(accent).add_modifier(Modifier::BOLD),
         )
-    } else if token.chars().all(|c| c.is_ascii_digit()) {
-        Span::styled(token.to_string(), base_style.fg(Color::Cyan))
+        }
+        TokenType::Operator => {
+            Span::styled(token.to_string(), base_style.fg(Color::Rgb(200, 150, 200)))
+        }
+        TokenType::Punctuation => {
+            Span::styled(token.to_string(), base_style.fg(Color::Rgb(150, 150, 150)))
+        }
+        TokenType::Identifier => {
+            // Check if it's a keyword
+            let keywords = keyword_set(lang);
+            let clean = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+            if keywords.contains(clean) {
+                Span::styled(
+                    token.to_string(),
+                    base_style.fg(accent).add_modifier(Modifier::BOLD),
+                )
     } else {
         Span::styled(token.to_string(), base_style.fg(Color::White))
+            }
+        }
+        TokenType::Whitespace => {
+            Span::styled(token.to_string(), base_style.fg(Color::Gray))
+        }
     }
 }
 
@@ -112,24 +296,9 @@ fn highlight_code_line(line: &str, lang: &str, accent: Color, bg: Color) -> Line
     let mut spans: Vec<Span> = Vec::new();
     spans.push(Span::styled("  ", Style::default().bg(bg)));
 
-    let mut current = String::new();
-    for ch in line.chars() {
-        if ch.is_whitespace() {
-            if !current.is_empty() {
-                spans.push(style_token(&current, lang, accent, bg));
-                current.clear();
-            }
-            spans.push(Span::styled(
-                ch.to_string(),
-                Style::default().bg(bg).fg(Color::Gray),
-            ));
-        } else {
-            current.push(ch);
-        }
-    }
-    if !current.is_empty() {
-        spans.push(style_token(&current, lang, accent, bg));
-    }
+    // Use tree-sitter for syntax highlighting
+    let highlighted_spans = highlight_line_with_tree_sitter(line, lang, accent, bg);
+    spans.extend(highlighted_spans);
 
     Line::from(spans)
 }
@@ -198,6 +367,18 @@ pub(crate) fn ui(f: &mut Frame, app: &mut App) {
             render_messages(f, app, main_chunks[0]);
             render_chat_sidebar(f, app, main_chunks[1]);
         }
+        AppState::Editor => {
+            // Editor disabled for performance reasons - code kept for future use
+            // crate::editor::editor_ui::render_editor(f, app);
+            // return; // Editor handles its own layout, so return early
+            // Show a message instead
+            let message = "Editor mode is currently disabled for performance optimization.";
+            let paragraph = Paragraph::new(message)
+                .block(Block::default().borders(Borders::ALL).title("Editor Disabled"))
+                .alignment(ratatui::layout::Alignment::Center)
+                .wrap(ratatui::widgets::Wrap { trim: true });
+            f.render_widget(paragraph, layout[1]);
+        }
         AppState::SessionSelector => {
             let main_chunks = Layout::default()
                 .direction(Direction::Horizontal)
@@ -222,7 +403,7 @@ pub(crate) fn ui(f: &mut Frame, app: &mut App) {
                 AppState::CustomModel => render_custom_model(f, app, main_chunks[1]),
                 AppState::BaseUrlSelector => render_baseurl_selector(f, app, main_chunks[1]),
                 AppState::ThemeSelector => render_theme_selector(f, app, main_chunks[1]),
-                AppState::SessionSelector | AppState::Chat | AppState::Welcome => unreachable!(),
+                AppState::SessionSelector | AppState::Chat | AppState::Welcome | AppState::Editor => unreachable!(),
             }
         }
     }
@@ -230,6 +411,7 @@ pub(crate) fn ui(f: &mut Frame, app: &mut App) {
     let input_area = match app.state {
         AppState::Welcome => centered_rect(80, 10, layout[1]),
         AppState::CustomModel => Rect::default(),
+        AppState::Editor => Rect::default(), // Editor doesn't use input area
         _ => layout[2],
     };
 
@@ -244,7 +426,7 @@ pub(crate) fn ui(f: &mut Frame, app: &mut App) {
         AppState::Welcome => {
             render_input(f, app, input_area);
         }
-        AppState::CustomModel => {}
+        AppState::CustomModel | AppState::Editor => {}
         _ => {
             render_input(f, app, input_area);
         }
@@ -260,6 +442,8 @@ fn render_tool_call_card(
     result: &Option<String>,
     status: &ToolStatus,
     is_light_theme: bool,
+    available_width: usize,
+    accent: Color,
 ) -> ListItem<'static> {
     let mut lines = Vec::new();
     let parsed_args: Option<serde_json::Value> = serde_json::from_str(args).ok();
@@ -307,10 +491,11 @@ fn render_tool_call_card(
         }
     };
 
-    // Subtle top border
+    // Subtle top border - use available width minus padding
+    let border_width = available_width.saturating_sub(2).max(10);
     lines.push(Line::from(vec![
         Span::styled("  ", Style::default()),
-        Span::styled("─".repeat(100), Style::default().fg(Color::Rgb(50, 50, 55))),
+        Span::styled("─".repeat(border_width), Style::default().fg(Color::Rgb(50, 50, 55))),
     ]));
 
     // Clean header without emojis
@@ -357,13 +542,19 @@ fn render_tool_call_card(
                 .to_string();
 
             if !path.is_empty() {
+                let max_path_len = available_width.saturating_sub(10).max(20); // Account for "File: " prefix
+                let display_path = if path.chars().count() > max_path_len {
+                    format!("{}…", path.chars().take(max_path_len.saturating_sub(1)).collect::<String>())
+                } else {
+                    path.clone()
+                };
                 lines.push(Line::from(vec![
                     Span::styled("     ", Style::default()),
                     Span::styled(
                         "File: ".to_string(),
                         Style::default().fg(Color::Rgb(110, 110, 130)),
                     ),
-                    Span::styled(path, Style::default().fg(Color::Rgb(160, 180, 220))),
+                    Span::styled(display_path, Style::default().fg(Color::Rgb(160, 180, 220))),
                 ]));
 
                 let old_snip = json.get("oldString").and_then(|v| v.as_str()).unwrap_or("");
@@ -398,8 +589,9 @@ fn render_tool_call_card(
     } else if name == "bash" || name == "run_terminal_cmd" {
         if let Some(json) = parsed_args.as_ref() {
             if let Some(cmd) = json.get("cmd").and_then(|v| v.as_str()) {
-                let preview = if cmd.len() > 80 {
-                    format!("{}…", &cmd[..79])
+                let max_cmd_len = available_width.saturating_sub(15).max(20); // Account for "Command: " prefix
+                let preview = if cmd.len() > max_cmd_len {
+                    format!("{}…", &cmd[..max_cmd_len.saturating_sub(1)])
                 } else {
                     cmd.to_string()
                 };
@@ -420,6 +612,12 @@ fn render_tool_call_card(
                 .or_else(|| json.get("path"))
                 .and_then(|v| v.as_str())
             {
+                let max_path_len = available_width.saturating_sub(12).max(20); // Account for "Reading: " prefix
+                let display_path = if path.chars().count() > max_path_len {
+                    format!("{}…", path.chars().take(max_path_len.saturating_sub(1)).collect::<String>())
+                } else {
+                    path.to_string()
+                };
                 lines.push(Line::from(vec![
                     Span::styled("     ", Style::default()),
                     Span::styled(
@@ -427,7 +625,7 @@ fn render_tool_call_card(
                         Style::default().fg(Color::Rgb(110, 110, 130)),
                     ),
                     Span::styled(
-                        path.to_string(),
+                        display_path,
                         Style::default().fg(Color::Rgb(160, 180, 220)),
                     ),
                 ]));
@@ -436,8 +634,9 @@ fn render_tool_call_card(
     } else if name == "grep" || name == "grep_search" {
         if let Some(json) = parsed_args.as_ref() {
             if let Some(pattern) = json.get("pattern").and_then(|v| v.as_str()) {
-                let preview = if pattern.len() > 60 {
-                    format!("{}…", &pattern[..59])
+                let max_pattern_len = available_width.saturating_sub(20).max(20); // Account for "Pattern: " prefix and quotes
+                let preview = if pattern.len() > max_pattern_len {
+                    format!("{}…", &pattern[..max_pattern_len.saturating_sub(1)])
                 } else {
                     pattern.to_string()
                 };
@@ -457,6 +656,12 @@ fn render_tool_call_card(
     } else if name == "list_dir" {
         if let Some(json) = parsed_args.as_ref() {
             if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
+                let max_path_len = available_width.saturating_sub(15).max(20); // Account for "Directory: " prefix
+                let display_path = if path.chars().count() > max_path_len {
+                    format!("{}…", path.chars().take(max_path_len.saturating_sub(1)).collect::<String>())
+                } else {
+                    path.to_string()
+                };
                 lines.push(Line::from(vec![
                     Span::styled("     ", Style::default()),
                     Span::styled(
@@ -464,7 +669,7 @@ fn render_tool_call_card(
                         Style::default().fg(Color::Rgb(110, 110, 130)),
                     ),
                     Span::styled(
-                        path.to_string(),
+                        display_path,
                         Style::default().fg(Color::Rgb(160, 180, 220)),
                     ),
                 ]));
@@ -497,10 +702,18 @@ fn render_tool_call_card(
                                 format!("[{}] ", type_str),
                                 Style::default().fg(Color::Rgb(140, 140, 160)),
                             ),
+                            {
+                                let max_path_len = available_width.saturating_sub(15).max(20); // Account for "       " + "1. " + "[file] " prefix
+                                let display_path = if path.chars().count() > max_path_len {
+                                    format!("{}…", path.chars().take(max_path_len.saturating_sub(1)).collect::<String>())
+                                } else {
+                                    path.to_string()
+                                };
                             Span::styled(
-                                path.to_string(),
+                                    display_path,
                                 Style::default().fg(Color::Rgb(160, 180, 220)),
-                            ),
+                                )
+                            },
                         ]));
                     }
                 }
@@ -529,10 +742,18 @@ fn render_tool_call_card(
                         }.to_string(),
                         Style::default().fg(Color::Rgb(110, 110, 130)),
                     ),
+                    {
+                        let max_path_len = available_width.saturating_sub(25).max(20); // Account for "Creating directory: " or "File: " prefix
+                        let display_path = if path.chars().count() > max_path_len {
+                            format!("{}…", path.chars().take(max_path_len.saturating_sub(1)).collect::<String>())
+                        } else {
+                            path.to_string()
+                        };
                     Span::styled(
-                        path.to_string(),
+                            display_path,
                         Style::default().fg(Color::Rgb(160, 180, 220)),
-                    ),
+                        )
+                    },
                 ]));
 
                 // Show line numbers for partial replacement
@@ -583,10 +804,11 @@ fn render_tool_call_card(
                                 "text"
                             };
                             
+                            let separator_width = available_width.saturating_sub(5).max(10);
                             lines.push(Line::from(vec![
                                 Span::styled("     ", Style::default()),
                                 Span::styled(
-                                    "─".repeat(60),
+                                    "─".repeat(separator_width),
                                     Style::default().fg(Color::Rgb(60, 60, 80)),
                                 ),
                             ]));
@@ -604,20 +826,48 @@ fn render_tool_call_card(
                                 ),
                             ]));
 
-                            // Detect language from file extension
+                            // Detect language from file extension - improved detection
                             let lang = if let Some(ext) = path.rsplit('.').next() {
-                                match ext {
+                                match ext.to_lowercase().as_str() {
                                     "rs" => "rust",
                                     "py" => "python",
+                                    "pyw" => "python",
                                     "js" => "javascript",
+                                    "mjs" => "javascript",
                                     "ts" => "typescript",
                                     "tsx" => "typescript",
                                     "jsx" => "javascript",
                                     "go" => "go",
                                     "java" => "java",
-                                    "c" | "h" => "c",
-                                    "cpp" | "cc" | "cxx" | "hpp" => "cpp",
+                                    "c" => "c",
+                                    "h" => "c",
+                                    "cpp" | "cc" | "cxx" | "hpp" | "hxx" => "cpp",
                                     "ml" | "mli" => "ocaml",
+                                    "json" => "json",
+                                    "toml" => "toml",
+                                    "yaml" | "yml" => "yaml",
+                                    "md" => "markdown",
+                                    "sh" | "bash" => "bash",
+                                    "zsh" => "bash",
+                                    "fish" => "bash",
+                                    "html" | "htm" => "html",
+                                    "css" => "css",
+                                    "xml" => "xml",
+                                    "sql" => "sql",
+                                    "rb" => "ruby",
+                                    "php" => "php",
+                                    "swift" => "swift",
+                                    "kt" | "kts" => "kotlin",
+                                    "scala" => "scala",
+                                    "clj" | "cljs" => "clojure",
+                                    "hs" => "haskell",
+                                    "elm" => "elm",
+                                    "ex" | "exs" => "elixir",
+                                    "erl" | "hrl" => "erlang",
+                                    "lua" => "lua",
+                                    "vim" => "vim",
+                                    "r" => "r",
+                                    "m" => "matlab",
                                     _ => "",
                                 }
                             } else {
@@ -630,7 +880,6 @@ fn render_tool_call_card(
                             let total_lines = content_lines.len();
                             
                             for (idx, line) in content_lines.iter().take(display_limit).enumerate() {
-                                // Manually apply syntax highlighting without the wrapper function
                                 let mut line_spans = vec![
                                     Span::styled("       ", Style::default()),
                                     Span::styled(
@@ -639,25 +888,9 @@ fn render_tool_call_card(
                                     ),
                                 ];
                                 
-                                // Simple syntax highlighting by tokenizing the line
-                                let mut current_token = String::new();
-                                for ch in line.chars() {
-                                    if ch.is_whitespace() {
-                                        if !current_token.is_empty() {
-                                            line_spans.push(style_token(&current_token, lang, status_fg, code_bg));
-                                            current_token.clear();
-                                        }
-                                        line_spans.push(Span::styled(
-                                            ch.to_string(),
-                                            Style::default().bg(code_bg).fg(Color::Gray),
-                                        ));
-                                    } else {
-                                        current_token.push(ch);
-                                    }
-                                }
-                                if !current_token.is_empty() {
-                                    line_spans.push(style_token(&current_token, lang, status_fg, code_bg));
-                                }
+                                // Use tree-sitter for syntax highlighting with accent color
+                                let highlighted_spans = highlight_line_with_tree_sitter(line, lang, accent, code_bg);
+                                line_spans.extend(highlighted_spans);
                                 
                                 lines.push(Line::from(line_spans));
                             }
@@ -675,10 +908,11 @@ fn render_tool_call_card(
                             }
                             
                             // Closing separator
+                            let separator_width = available_width.saturating_sub(5).max(10);
                             lines.push(Line::from(vec![
                                 Span::styled("     ", Style::default()),
                                 Span::styled(
-                                    "─".repeat(60),
+                                    "─".repeat(separator_width),
                                     Style::default().fg(Color::Rgb(60, 60, 80)),
                                 ),
                             ]));
@@ -689,28 +923,49 @@ fn render_tool_call_card(
         }
     }
 
-    // Detect language for result highlighting when we have a file path
+    // Detect language for result highlighting when we have a file path - improved detection
     let lang_hint = parsed_args.as_ref().and_then(|json| {
         json.get("target_file")
             .or_else(|| json.get("path"))
             .and_then(|v| v.as_str())
             .and_then(|path| {
                 let ext = path.rsplit('.').next().unwrap_or("");
-                match ext {
+                match ext.to_lowercase().as_str() {
                     "rs" => Some("rust"),
-                    "py" => Some("python"),
-                    "js" => Some("javascript"),
-                    "ts" | "tsx" => Some("typescript"),
+                    "py" | "pyw" => Some("python"),
+                    "js" | "mjs" => Some("javascript"),
+                    "ts" => Some("typescript"),
+                    "tsx" => Some("typescript"),
                     "jsx" => Some("javascript"),
                     "go" => Some("go"),
                     "java" => Some("java"),
-                    "c" | "h" => Some("c"),
-                    "cpp" | "cc" | "cxx" | "hpp" => Some("cpp"),
+                    "c" => Some("c"),
+                    "h" => Some("c"),
+                    "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some("cpp"),
                     "ml" | "mli" => Some("ocaml"),
                     "json" => Some("json"),
                     "toml" => Some("toml"),
                     "yaml" | "yml" => Some("yaml"),
                     "md" => Some("markdown"),
+                    "sh" | "bash" | "zsh" | "fish" => Some("bash"),
+                    "html" | "htm" => Some("html"),
+                    "css" => Some("css"),
+                    "xml" => Some("xml"),
+                    "sql" => Some("sql"),
+                    "rb" => Some("ruby"),
+                    "php" => Some("php"),
+                    "swift" => Some("swift"),
+                    "kt" | "kts" => Some("kotlin"),
+                    "scala" => Some("scala"),
+                    "clj" | "cljs" => Some("clojure"),
+                    "hs" => Some("haskell"),
+                    "elm" => Some("elm"),
+                    "ex" | "exs" => Some("elixir"),
+                    "erl" | "hrl" => Some("erlang"),
+                    "lua" => Some("lua"),
+                    "vim" => Some("vim"),
+                    "r" => Some("r"),
+                    "m" => Some("matlab"),
                     _ => None,
                 }
             })
@@ -738,13 +993,69 @@ fn render_tool_call_card(
             let result_lines: Vec<&str> = normalized.lines().collect();
             let total_lines = result_lines.len();
             let display_limit = 12;
-            let max_line_width = 90; // Max characters per line before wrapping
+            // Account for "       " (7 chars) + "   │ " (5 chars) = 12 chars padding
+            let max_line_width = available_width.saturating_sub(12).max(20);
 
-            if name == "read_file" && lang_hint.is_some() {
-                let lang = lang_hint.unwrap_or("");
+            // Apply syntax highlighting for read_file - always try to detect language
+            if name == "read_file" {
+                // Try to get language from lang_hint first, then fallback to detecting from args
+                let detected_lang = lang_hint
+                    .or_else(|| {
+                        parsed_args.as_ref()
+                            .and_then(|json| {
+                                json.get("target_file")
+                                    .or_else(|| json.get("path"))
+                                    .and_then(|v| v.as_str())
+                                    .and_then(|path| {
+                                        let ext = path.rsplit('.').next().unwrap_or("");
+                                        match ext.to_lowercase().as_str() {
+                                            "rs" => Some("rust"),
+                                            "py" | "pyw" => Some("python"),
+                                            "js" | "mjs" => Some("javascript"),
+                                            "ts" => Some("typescript"),
+                                            "tsx" => Some("typescript"),
+                                            "jsx" => Some("javascript"),
+                                            "go" => Some("go"),
+                                            "java" => Some("java"),
+                                            "c" => Some("c"),
+                                            "h" => Some("c"),
+                                            "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some("cpp"),
+                                            "ml" | "mli" => Some("ocaml"),
+                                            "json" => Some("json"),
+                                            "toml" => Some("toml"),
+                                            "yaml" | "yml" => Some("yaml"),
+                                            "md" => Some("markdown"),
+                                            "sh" | "bash" | "zsh" | "fish" => Some("bash"),
+                                            "html" | "htm" => Some("html"),
+                                            "css" => Some("css"),
+                                            "xml" => Some("xml"),
+                                            "sql" => Some("sql"),
+                                            "rb" => Some("ruby"),
+                                            "php" => Some("php"),
+                                            "swift" => Some("swift"),
+                                            "kt" | "kts" => Some("kotlin"),
+                                            "scala" => Some("scala"),
+                                            "clj" | "cljs" => Some("clojure"),
+                                            "hs" => Some("haskell"),
+                                            "elm" => Some("elm"),
+                                            "ex" | "exs" => Some("elixir"),
+                                            "erl" | "hrl" => Some("erlang"),
+                                            "lua" => Some("lua"),
+                                            "vim" => Some("vim"),
+                                            "r" => Some("r"),
+                                            "m" => Some("matlab"),
+                                            _ => None,
+                                        }
+                                    })
+                            })
+                    })
+                    .unwrap_or("");
+
                 let mut displayed = 0;
                 for (idx, line) in result_lines.iter().take(display_limit).enumerate() {
+                    // Handle both formats: "L{num}:{content}" and plain lines
                     let (line_no, code_body) = if let Some(rest) = line.strip_prefix('L') {
+                        // Format: L{num}:{content}
                         let mut parts = rest.splitn(2, ':');
                         if let (Some(num), Some(body)) = (parts.next(), parts.next()) {
                             (num.parse::<usize>().unwrap_or(idx + 1), body)
@@ -752,10 +1063,10 @@ fn render_tool_call_card(
                             (idx + 1, *line)
                         }
                     } else {
+                        // Plain line format (entire file read)
                         (idx + 1, *line)
                     };
 
-                    // Manually apply syntax highlighting
                     let mut line_spans = vec![
                         Span::styled("       ", Style::default()),
                         Span::styled(
@@ -764,25 +1075,9 @@ fn render_tool_call_card(
                         ),
                     ];
                     
-                    // Simple syntax highlighting by tokenizing the line
-                    let mut current_token = String::new();
-                    for ch in code_body.chars() {
-                        if ch.is_whitespace() {
-                            if !current_token.is_empty() {
-                                line_spans.push(style_token(&current_token, lang, status_fg, code_bg));
-                                current_token.clear();
-                            }
-                            line_spans.push(Span::styled(
-                                ch.to_string(),
-                                Style::default().bg(code_bg).fg(Color::Gray),
-                            ));
-                        } else {
-                            current_token.push(ch);
-                        }
-                    }
-                    if !current_token.is_empty() {
-                        line_spans.push(style_token(&current_token, lang, status_fg, code_bg));
-                    }
+                    // Always try syntax highlighting - tree-sitter will fallback to basic highlighting if needed
+                    let highlighted_spans = highlight_line_with_tree_sitter(code_body, detected_lang, accent, code_bg);
+                    line_spans.extend(highlighted_spans);
                     
                     lines.push(Line::from(line_spans));
                     displayed += 1;
@@ -807,13 +1102,22 @@ fn render_tool_call_card(
                         break;
                     }
 
-                    // Wrap long lines
-                    if line.len() > max_line_width {
+                    // Wrap long lines - need to handle character boundaries properly
+                    if line.chars().count() > max_line_width {
                         let mut remaining = *line;
                         let mut is_first = true;
 
                         while !remaining.is_empty() && displayed_line_count < display_limit {
-                            let chunk_end = max_line_width.min(remaining.len());
+                            // Find the next chunk respecting character boundaries
+                            let mut chunk_end = remaining.len();
+                            let mut current_char_count = 0;
+                            for (idx, _) in remaining.char_indices() {
+                                if current_char_count >= max_line_width {
+                                    chunk_end = idx;
+                                    break;
+                                }
+                                current_char_count += 1;
+                            }
                             let chunk = &remaining[..chunk_end];
 
                             if !chunk.trim().is_empty() {
@@ -886,6 +1190,9 @@ fn render_tool_call_card(
 fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.current_theme();
     let accent = agent_accent(app.selected_agent);
+    
+    // Calculate available width for text wrapping (account for scrollbar and padding)
+    let available_width = area.width.saturating_sub(2).max(20) as usize; // Subtract 2 for scrollbar, min 20
 
     // Theme-aware backgrounds
     let (user_bg, assistant_bg, thinking_bg, code_bg) = if theme.name == "Light" {
@@ -926,23 +1233,27 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                     ),
                 ]));
 
+                let separator_width = available_width.saturating_sub(2).max(10);
                 user_lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(user_bg)),
                     Span::styled(
-                        "─".repeat(80),
+                        "─".repeat(separator_width),
                         Style::default().fg(Color::Rgb(50, 50, 60)).bg(user_bg),
                     ),
                 ]));
 
                 // User content with proper wrapping
+                let user_text_width = available_width.saturating_sub(2).max(20);
                 for line in content.lines() {
+                    for wrapped_line in wrap_to_width(line, user_text_width) {
                     user_lines.push(Line::from(vec![
                         Span::styled("  ", Style::default().bg(user_bg)),
                         Span::styled(
-                            line.to_string(),
+                                wrapped_line,
                             Style::default().fg(Color::Rgb(220, 220, 240)).bg(user_bg),
                         ),
                     ]));
+                    }
                 }
 
                 // Bottom spacing
@@ -971,10 +1282,11 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                     ),
                 ]));
 
+                let separator_width = available_width.saturating_sub(2).max(10);
                 assistant_lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(assistant_bg)),
                     Span::styled(
-                        "─".repeat(80),
+                        "─".repeat(separator_width),
                         Style::default().fg(Color::Rgb(45, 48, 52)).bg(assistant_bg),
                     ),
                 ]));
@@ -1002,7 +1314,7 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                 result,
                 status,
                 ..
-            } => render_tool_call_card(id, name, args, result, status, theme.name == "Light"),
+            } => render_tool_call_card(id, name, args, result, status, theme.name == "Light", available_width, accent),
             ChatMessage::Thinking(content) => {
                 let mut lines = Vec::new();
 
@@ -1023,16 +1335,18 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                     ),
                 ]));
 
+                let separator_width = available_width.saturating_sub(2).max(10);
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(thinking_bg)),
                     Span::styled(
-                        "─".repeat(80),
+                        "─".repeat(separator_width),
                         Style::default().fg(Color::Rgb(50, 52, 58)).bg(thinking_bg),
                     ),
                 ]));
 
                 // Thinking content with professional styling
-                for seg in wrap_preserve_lines(content, 95).into_iter() {
+                let thinking_text_width = available_width.saturating_sub(2).max(20);
+                for seg in wrap_preserve_lines(content, thinking_text_width).into_iter() {
                     lines.push(Line::from(vec![
                         Span::styled("  ", Style::default().bg(thinking_bg)),
                         Span::styled(
@@ -1071,23 +1385,27 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                     ),
                 ]));
 
+                let separator_width = available_width.saturating_sub(2).max(10);
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(error_bg)),
                     Span::styled(
-                        "─".repeat(80),
+                        "─".repeat(separator_width),
                         Style::default().fg(Color::Rgb(60, 45, 45)).bg(error_bg),
                     ),
                 ]));
 
-                // Error message
+                // Error message with proper wrapping
+                let error_text_width = available_width.saturating_sub(2).max(20);
                 for line in err.lines() {
+                    for wrapped_line in wrap_to_width(line, error_text_width) {
                     lines.push(Line::from(vec![
                         Span::styled("  ", Style::default().bg(error_bg)),
                         Span::styled(
-                            line.to_string(),
+                                wrapped_line,
                             Style::default().fg(Color::Rgb(220, 140, 140)).bg(error_bg),
                         ),
                     ]));
+                    }
                 }
 
                 // Bottom spacing

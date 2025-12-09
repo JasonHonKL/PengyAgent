@@ -154,6 +154,19 @@ pub(crate) fn handle_state_key(
         AppState::BaseUrlSelector => handle_baseurl_selector_key(app, key),
         AppState::CustomModel => handle_custom_model_key(app, key),
         AppState::Help => handle_help_key(app, key),
+        AppState::Editor => {
+            // Editor disabled for performance reasons - code kept for future use
+            // match crate::editor::editor_handlers::handle_editor_key(app, key) {
+            //     Ok(should_quit) => should_quit,
+            //     Err(e) if e.to_string() == "quit" => true,
+            //     Err(_) => false,
+            // }
+            // Just allow escape to go back
+            if key == KeyCode::Esc {
+                app.state = AppState::Welcome;
+            }
+            false
+        }
     };
 
     Ok(should_quit)
@@ -835,6 +848,15 @@ pub(crate) fn handle_command_inline(app: &mut App, cmd: &str, previous_state: Ap
         app.theme_list_state.select(Some(idx));
         app.theme_search_query.clear();
         app.theme_search_focused = false;
+    } else if cmd.starts_with("/editor") {
+        // Editor disabled for performance reasons - code kept for future use
+        // app.previous_state = Some(previous_state);
+        // app.state = AppState::Editor;
+        // app.editor_state = crate::editor::editor::EditorState::new();
+        // Show error message instead
+        app.chat_messages.push(crate::app::ChatMessage::Error(
+            "Editor mode is currently disabled for performance optimization. The code is preserved for future use.".to_string()
+        ));
     }
     app.chat_input.clear();
     app.input_cursor = 0;

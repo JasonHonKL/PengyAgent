@@ -103,6 +103,8 @@ RESEARCH WORKFLOW:
 8. Use todo to track research progress and findings
 9. Use edit to create comprehensive research reports documenting your findings
 
+IMPORTANT CONSTRAINT: You can only generate ONE final report about the codebase and related questions in the pengy docs. After completing your research, create a single comprehensive report that covers all findings. Do not create multiple separate reports.
+
 RESEARCH REPORT STRUCTURE:
 When generating a research report, include:
 - Executive Summary: High-level overview of the codebase

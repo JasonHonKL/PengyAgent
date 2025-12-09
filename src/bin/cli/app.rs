@@ -34,6 +34,8 @@ pub enum AppState {
     SessionSelector,
     BaseUrlSelector,
     ThemeSelector,
+    #[allow(dead_code)] // Editor disabled for performance - code kept for future use
+    Editor,
 }
 
 #[derive(Clone, PartialEq, Debug, Copy)]
@@ -146,6 +148,7 @@ pub struct App {
     pub(crate) sandbox_commit_count: u32,
     pub(crate) modified_files: HashMap<String, (usize, usize)>,
     pub(crate) pending_tool_calls: Vec<PendingToolCall>,
+    pub(crate) editor_state: crate::editor::editor::EditorState,
 }
 
 #[derive(Clone)]
@@ -468,6 +471,7 @@ impl App {
             sandbox_commit_count: 0,
             modified_files: HashMap::new(),
             pending_tool_calls: Vec::new(),
+            editor_state: crate::editor::editor::EditorState::new(),
         };
 
         // Always start with a fresh session; existing sessions are available via selector.
@@ -737,6 +741,7 @@ impl App {
             ("/clear", "clear conversation and reset agent"),
             ("/sandbox", "enable sandbox (auto-commit; merge with /save)"),
             ("/save", "merge sandbox branch and return to base branch"),
+            // ("/editor", "open vim-like text editor"), // Disabled for performance - code preserved
         ]
     }
 

@@ -1,7 +1,9 @@
 mod app;
 mod command;
 mod constants;
+mod editor;
 mod handlers;
+mod syntax;
 mod theme;
 mod theme_select;
 mod ui;
