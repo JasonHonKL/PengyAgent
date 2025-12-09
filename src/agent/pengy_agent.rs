@@ -73,8 +73,11 @@ pub mod pengy_agent {
         callback(AgentEvent::Thinking {
             content: "=== PHASE 2: Code Implementation ===".to_string(),
         });
-        let implementation_prompt =
-            implementation_prompt(&user_request, &research_report, conversation_history.as_deref());
+        let implementation_prompt = implementation_prompt(
+            &user_request,
+            &research_report,
+            conversation_history.as_deref(),
+        );
 
         let mut coder_agent = create_coder_agent(
             model.clone(),

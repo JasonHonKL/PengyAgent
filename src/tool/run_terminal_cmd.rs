@@ -45,7 +45,8 @@ pub mod run_terminal_cmd {
                 "require_user_approval".to_string(),
                 Parameter {
                     items: approval_items,
-                    description: "Ignored in this implementation; included for compatibility.".to_string(),
+                    description: "Ignored in this implementation; included for compatibility."
+                        .to_string(),
                     enum_values: None,
                 },
             );
@@ -85,7 +86,10 @@ pub mod run_terminal_cmd {
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn()?;
-                Ok(format!("Command started in background with PID {}", child.id()))
+                Ok(format!(
+                    "Command started in background with PID {}",
+                    child.id()
+                ))
             } else {
                 let output = Command::new("bash").arg("-c").arg(command).output()?;
                 let mut result = String::new();
@@ -119,4 +123,3 @@ pub mod run_terminal_cmd {
         }
     }
 }
-

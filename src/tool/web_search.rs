@@ -11,7 +11,9 @@ pub mod web_search {
 
     impl WebSearchTool {
         pub fn new() -> Self {
-            Self { inner: WebTool::new() }
+            Self {
+                inner: WebTool::new(),
+            }
         }
     }
 
@@ -40,4 +42,3 @@ pub mod web_search {
         }
     }
 }
-

@@ -29,7 +29,9 @@ pub mod multi_tool_use {
 
             let tool = Tool {
                 name: "multi_tool_use.parallel".to_string(),
-                description: "Placeholder: parallel tool execution is not supported; tools run sequentially.".to_string(),
+                description:
+                    "Placeholder: parallel tool execution is not supported; tools run sequentially."
+                        .to_string(),
                 parameters,
                 required: vec![],
             };
@@ -51,4 +53,3 @@ pub mod multi_tool_use {
         }
     }
 }
-

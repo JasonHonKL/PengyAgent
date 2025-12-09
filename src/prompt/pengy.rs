@@ -51,5 +51,3 @@ pub fn testing_prompt(
     }
     prompt
 }
-
-

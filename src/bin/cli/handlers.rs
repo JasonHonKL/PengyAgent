@@ -1,4 +1,4 @@
-use crate::app::{App, AppState, ModelOption};
+use crate::app::{App, AppState, ChatMessage, ModelOption};
 use crate::constants::DEFAULT_BASE_URL;
 use crossterm::event::KeyCode;
 use std::error::Error;
@@ -43,8 +43,10 @@ fn dispatch_slash_command(app: &mut App, cmd: &str, previous_state: AppState) {
     if cmd.starts_with("/sessions") {
         app.previous_state = Some(previous_state);
         app.state = AppState::SessionSelector;
-        app.session_list_state
-            .select(Some(app.current_session.min(app.sessions.len().saturating_sub(1))));
+        app.session_list_state.select(Some(
+            app.current_session
+                .min(app.sessions.len().saturating_sub(1)),
+        ));
         reset_input(app);
         return;
     }
@@ -201,10 +203,7 @@ fn filtered_models(app: &App) -> Vec<ModelOption> {
             .into_iter()
             .filter(|m| {
                 !m.name.starts_with("Provider:")
-                    && (m
-                        .name
-                        .to_lowercase()
-                        .contains(&query_lower)
+                    && (m.name.to_lowercase().contains(&query_lower)
                         || m.provider.to_lowercase().contains(&query_lower)
                         || m.base_url.to_lowercase().contains(&query_lower))
             })
@@ -408,7 +407,11 @@ fn handle_agent_selector_key(app: &mut App, key: KeyCode) -> bool {
         KeyCode::BackTab => {
             let agents = App::get_available_agents();
             let current = app.agent_list_state.selected().unwrap_or(0);
-            let prev = if current == 0 { agents.len() - 1 } else { current - 1 };
+            let prev = if current == 0 {
+                agents.len() - 1
+            } else {
+                current - 1
+            };
             app.agent_list_state.select(Some(prev));
             app.selected_agent = agents[prev].2;
         }
@@ -442,9 +445,7 @@ fn handle_agent_selector_key(app: &mut App, key: KeyCode) -> bool {
 
 fn handle_settings_key(app: &mut App, key: KeyCode) -> bool {
     match key {
-        KeyCode::Esc => {
-            app.state = app.previous_state.clone().unwrap_or(AppState::Welcome)
-        }
+        KeyCode::Esc => app.state = app.previous_state.clone().unwrap_or(AppState::Welcome),
         KeyCode::Tab => {
             app.settings_field = (app.settings_field + 1) % 3;
         }
@@ -546,7 +547,11 @@ fn handle_baseurl_selector_key(app: &mut App, key: KeyCode) -> bool {
         }
         KeyCode::Enter => {
             let filtered = filtered_provider_models(app);
-            if let Some(selected) = app.model_list_state.selected().and_then(|i| filtered.get(i)) {
+            if let Some(selected) = app
+                .model_list_state
+                .selected()
+                .and_then(|i| filtered.get(i))
+            {
                 let normalized_base = App::normalize_base_url(&selected.base_url);
                 app.settings_api_key = app.api_key.clone();
                 app.settings_base_url = normalized_base.clone();
@@ -634,9 +639,7 @@ fn handle_custom_model_key(app: &mut App, key: KeyCode) -> bool {
                             // After saving a custom model, return to the Welcome screen.
                             app.state = AppState::Welcome;
                         }
-                        Err(e) => {
-                            app.error = Some(format!("Error initializing: {}", e))
-                        }
+                        Err(e) => app.error = Some(format!("Error initializing: {}", e)),
                     }
                 }
             }
@@ -754,6 +757,33 @@ pub(crate) fn handle_command_inline(app: &mut App, cmd: &str, previous_state: Ap
         let _ = std::fs::remove_file(&todo_file);
         if !app.api_key.is_empty() {
             let _ = app.initialize_agent();
+        }
+        app.session_dirty = true;
+        app.save_current_session();
+    } else if cmd.starts_with("/sandbox") {
+        let enable = !(cmd.contains("off") || cmd.contains("disable"));
+        let result = if enable {
+            app.enable_sandbox_mode()
+        } else {
+            app.disable_sandbox_mode()
+        };
+        match result {
+            Ok(msg) => {
+                app.chat_messages.push(ChatMessage::Assistant(msg));
+            }
+            Err(err) => {
+                app.chat_messages
+                    .push(ChatMessage::Error(format!("[sandbox] {}", err)));
+            }
+        }
+        app.session_dirty = true;
+        app.save_current_session();
+    } else if cmd.starts_with("/save") {
+        match app.save_sandbox_changes() {
+            Ok(msg) => app.chat_messages.push(ChatMessage::Assistant(msg)),
+            Err(err) => app
+                .chat_messages
+                .push(ChatMessage::Error(format!("[sandbox] {}", err))),
         }
         app.session_dirty = true;
         app.save_current_session();

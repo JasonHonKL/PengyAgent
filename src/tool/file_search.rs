@@ -25,7 +25,8 @@ pub mod file_search {
                 "query".to_string(),
                 Parameter {
                     items: query_items,
-                    description: "Substring to look for in file paths (case-insensitive).".to_string(),
+                    description: "Substring to look for in file paths (case-insensitive)."
+                        .to_string(),
                     enum_values: None,
                 },
             );
@@ -36,7 +37,9 @@ pub mod file_search {
                 "root".to_string(),
                 Parameter {
                     items: root_items,
-                    description: "Optional root directory to search (default: current working directory).".to_string(),
+                    description:
+                        "Optional root directory to search (default: current working directory)."
+                            .to_string(),
                     enum_values: None,
                 },
             );
@@ -54,7 +57,8 @@ pub mod file_search {
 
             let tool = Tool {
                 name: "file_search".to_string(),
-                description: "Find files whose paths contain a given substring (case-insensitive).".to_string(),
+                description: "Find files whose paths contain a given substring (case-insensitive)."
+                    .to_string(),
                 parameters,
                 required: vec!["query".to_string()],
             };
@@ -82,11 +86,7 @@ pub mod file_search {
             }
         }
 
-        fn walk(
-            root: PathBuf,
-            query_lower: &str,
-            max_results: usize,
-        ) -> Vec<String> {
+        fn walk(root: PathBuf, query_lower: &str, max_results: usize) -> Vec<String> {
             let mut results = Vec::new();
             let mut stack = vec![root];
             while let Some(path) = stack.pop() {
@@ -128,10 +128,7 @@ pub mod file_search {
                 .get("query")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: query")?;
-            let root = args
-                .get("root")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let root = args.get("root").and_then(|v| v.as_str()).unwrap_or(".");
             let max_results = args
                 .get("maxResults")
                 .and_then(|v| v.as_u64())
@@ -160,4 +157,3 @@ pub mod file_search {
         }
     }
 }
-

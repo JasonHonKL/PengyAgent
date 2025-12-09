@@ -25,14 +25,17 @@ pub mod delete_file {
                 "target_file".to_string(),
                 Parameter {
                     items: path_items,
-                    description: "Absolute or relative path to delete. Must be inside the workspace.".to_string(),
+                    description:
+                        "Absolute or relative path to delete. Must be inside the workspace."
+                            .to_string(),
                     enum_values: None,
                 },
             );
 
             let tool = Tool {
                 name: "delete_file".to_string(),
-                description: "Delete a file or directory inside the workspace after validation.".to_string(),
+                description: "Delete a file or directory inside the workspace after validation."
+                    .to_string(),
                 parameters,
                 required: vec!["target_file".to_string()],
             };
@@ -101,4 +104,3 @@ pub mod delete_file {
         }
     }
 }
-

@@ -6,8 +6,8 @@ pub mod coder {
     use crate::tool::docs_researcher::docs_researcher::DocsResearcherTool;
     use crate::tool::edit::edit::EditTool;
     use crate::tool::end::end::EndTool;
-    use crate::tool::find_replace::find_replace::FindReplaceTool;
     use crate::tool::file_manager::file_manager::FileManagerTool;
+    use crate::tool::find_replace::find_replace::FindReplaceTool;
     use crate::tool::grep::grep::GrepTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
     use crate::tool::think::think::ThinkTool;

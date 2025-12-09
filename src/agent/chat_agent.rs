@@ -4,11 +4,8 @@ pub mod chat_agent {
         model::model::model::Model,
         prompt::chat::chat_system_prompt,
         tool::{
-            docs_reader::docs_reader::DocsReaderTool,
-            end::end::EndTool,
-            grep::grep::GrepTool,
-            summarizer::summarizer::SummarizerTool,
-            tool::tool::ToolCall,
+            docs_reader::docs_reader::DocsReaderTool, end::end::EndTool, grep::grep::GrepTool,
+            summarizer::summarizer::SummarizerTool, tool::tool::ToolCall,
         },
     };
 

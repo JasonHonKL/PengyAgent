@@ -37,7 +37,8 @@ pub mod read_file {
                 "should_read_entire_file".to_string(),
                 Parameter {
                     items: read_entire_items,
-                    description: "If true, read the whole file (use carefully for large files).".to_string(),
+                    description: "If true, read the whole file (use carefully for large files)."
+                        .to_string(),
                     enum_values: None,
                 },
             );
@@ -66,7 +67,7 @@ pub mod read_file {
 
             let tool = Tool {
                 name: "read_file".to_string(),
-                description: "Read a file entirely or a line slice (with defaults to limit output size).".to_string(),
+                description: "Read a file entirely or a line slice; if no range is given, the whole file is returned.".to_string(),
                 parameters,
                 required: vec!["target_file".to_string()],
             };
@@ -78,11 +79,7 @@ pub mod read_file {
             Ok(fs::read_to_string(path)?)
         }
 
-        fn read_slice(
-            path: &Path,
-            start: usize,
-            end: usize,
-        ) -> Result<String, Box<dyn Error>> {
+        fn read_slice(path: &Path, start: usize, end: usize) -> Result<String, Box<dyn Error>> {
             let content = fs::read_to_string(path)?;
             let lines: Vec<&str> = content.lines().collect();
             if lines.is_empty() {
@@ -125,20 +122,21 @@ pub mod read_file {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            if read_entire {
-                return Self::read_entire(path);
-            }
-
             let start = args
                 .get("start_line_one_indexed")
                 .and_then(|v| v.as_u64())
-                .map(|v| v as usize)
-                .unwrap_or(1);
-            let mut end = args
+                .map(|v| v as usize);
+            let end = args
                 .get("end_line_one_indexed_inclusive")
                 .and_then(|v| v.as_u64())
-                .map(|v| v as usize)
-                .unwrap_or(start + DEFAULT_MAX_LINES - 1);
+                .map(|v| v as usize);
+
+            if read_entire || (start.is_none() && end.is_none()) {
+                return Self::read_entire(path);
+            }
+
+            let start = start.unwrap_or(1);
+            let mut end = end.unwrap_or(start + DEFAULT_MAX_LINES - 1);
 
             if end < start {
                 end = start;
@@ -153,4 +151,3 @@ pub mod read_file {
         }
     }
 }
-

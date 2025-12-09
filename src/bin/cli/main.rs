@@ -15,15 +15,15 @@ use crossterm::{
     },
     execute,
     terminal::{
-        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, Clear,
-        ClearType,
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
     },
 };
 use handlers::{handle_state_key, scroll_chat_mouse};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
     error::Error,
-    io::{stdout, Stdout},
+    io::{Stdout, stdout},
     time::Duration,
 };
 use tokio::runtime::Runtime;
@@ -65,29 +65,29 @@ fn try_run_cmd_mode() -> Result<bool, Box<dyn Error>> {
 }
 
 fn print_cmd_usage() {
-                eprintln!(
-                    "\nUsage: pengy --prompt \"<prompt>\" --agent <agent-type> --model <model-name> --provider <provider> --api-key <api-key> [--base-url <base-url>]"
-                );
-                eprintln!("\nRequired arguments:");
-                eprintln!("  --prompt \"<prompt>\"        The prompt/question for the agent");
-                eprintln!("  --agent <agent-type>        The agent type to use");
-                eprintln!("  --model <model-name>        The model name (e.g., openai/gpt-4o)");
-                eprintln!("  --provider <provider>       The provider name (e.g., OpenAI, Custom)");
-                eprintln!("  --api-key <api-key>         Your API key");
-                eprintln!("\nOptional arguments:");
+    eprintln!(
+        "\nUsage: pengy --prompt \"<prompt>\" --agent <agent-type> --model <model-name> --provider <provider> --api-key <api-key> [--base-url <base-url>]"
+    );
+    eprintln!("\nRequired arguments:");
+    eprintln!("  --prompt \"<prompt>\"        The prompt/question for the agent");
+    eprintln!("  --agent <agent-type>        The agent type to use");
+    eprintln!("  --model <model-name>        The model name (e.g., openai/gpt-4o)");
+    eprintln!("  --provider <provider>       The provider name (e.g., OpenAI, Custom)");
+    eprintln!("  --api-key <api-key>         Your API key");
+    eprintln!("\nOptional arguments:");
     eprintln!("  --base-url <base-url>       Custom base URL (required for Custom provider)");
-                eprintln!("\nAvailable agent types:");
-                eprintln!("  - coder");
-                eprintln!("  - code-researcher");
-                eprintln!("  - test-agent");
-                eprintln!("  - pengy-agent");
-                eprintln!("  - control-agent");
-                eprintln!("  - issue-agent");
-                eprintln!("\nExample:");
-                eprintln!(
-                    "  pengy --prompt \"Write a hello world function\" --agent coder --model openai/gpt-4o --provider OpenAI --api-key sk-..."
-                );
-    }
+    eprintln!("\nAvailable agent types:");
+    eprintln!("  - coder");
+    eprintln!("  - code-researcher");
+    eprintln!("  - test-agent");
+    eprintln!("  - pengy-agent");
+    eprintln!("  - control-agent");
+    eprintln!("  - issue-agent");
+    eprintln!("\nExample:");
+    eprintln!(
+        "  pengy --prompt \"Write a hello world function\" --agent coder --model openai/gpt-4o --provider OpenAI --api-key sk-..."
+    );
+}
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>, Box<dyn Error>> {
     enable_raw_mode()?;
@@ -102,7 +102,9 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>, Box<dyn Error>
     Ok(Terminal::new(backend)?)
 }
 
-fn cleanup_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<(), Box<dyn Error>> {
+fn cleanup_terminal(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+) -> Result<(), Box<dyn Error>> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -160,15 +162,19 @@ fn run_tui(
 
                     let should_quit = handle_state_key(app, key.code, rt)?;
 
-                if should_quit {
-                    break;
-                }
+                    if should_quit {
+                        break;
+                    }
                 }
                 Event::Mouse(mouse_event) => match mouse_event.kind {
-                    MouseEventKind::ScrollUp if app.state == AppState::Chat && !app.chat_messages.is_empty() => {
+                    MouseEventKind::ScrollUp
+                        if app.state == AppState::Chat && !app.chat_messages.is_empty() =>
+                    {
                         scroll_chat_mouse(app, -1)
                     }
-                    MouseEventKind::ScrollDown if app.state == AppState::Chat && !app.chat_messages.is_empty() => {
+                    MouseEventKind::ScrollDown
+                        if app.state == AppState::Chat && !app.chat_messages.is_empty() =>
+                    {
                         scroll_chat_mouse(app, 1)
                     }
                     _ => {}

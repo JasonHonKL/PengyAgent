@@ -40,4 +40,3 @@ pub const THEMES: &[Theme] = &[
         text: Color::Rgb(20, 20, 20),
     },
 ];
-

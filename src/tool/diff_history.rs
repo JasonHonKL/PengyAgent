@@ -31,10 +31,7 @@ pub mod diff_history {
         }
 
         fn run(&self, _arguments: &str) -> Result<String, Box<dyn Error>> {
-            let output = Command::new("git")
-                .arg("diff")
-                .arg("--stat")
-                .output();
+            let output = Command::new("git").arg("diff").arg("--stat").output();
 
             match output {
                 Ok(out) => {
@@ -58,4 +55,3 @@ pub mod diff_history {
         }
     }
 }
-

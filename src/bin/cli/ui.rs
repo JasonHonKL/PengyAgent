@@ -11,8 +11,8 @@ use ratatui::{
         Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, Wrap,
     },
 };
-use std::collections::HashSet;
 use serde_json;
+use std::collections::HashSet;
 
 fn wrap_to_width(text: &str, max: usize) -> Vec<String> {
     if text.len() <= max {
@@ -108,8 +108,7 @@ fn style_token(token: &str, lang: &str, accent: Color, bg: Color) -> Span<'stati
     }
 }
 
-fn highlight_code_line(line: &str, lang: &str, accent: Color) -> Line<'static> {
-    let bg = Color::Rgb(25, 25, 25);
+fn highlight_code_line(line: &str, lang: &str, accent: Color, bg: Color) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
     spans.push(Span::styled("  ", Style::default().bg(bg)));
 
@@ -120,7 +119,10 @@ fn highlight_code_line(line: &str, lang: &str, accent: Color) -> Line<'static> {
                 spans.push(style_token(&current, lang, accent, bg));
                 current.clear();
             }
-            spans.push(Span::styled(ch.to_string(), Style::default().bg(bg).fg(Color::Gray)));
+            spans.push(Span::styled(
+                ch.to_string(),
+                Style::default().bg(bg).fg(Color::Gray),
+            ));
         } else {
             current.push(ch);
         }
@@ -132,7 +134,7 @@ fn highlight_code_line(line: &str, lang: &str, accent: Color) -> Line<'static> {
     Line::from(spans)
 }
 
-fn render_markdown_with_code(content: &str, accent: Color) -> Vec<Line<'static>> {
+fn render_markdown_with_code(content: &str, accent: Color, code_bg: Color) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::raw("")));
 
@@ -144,9 +146,7 @@ fn render_markdown_with_code(content: &str, accent: Color) -> Vec<Line<'static>>
             if in_code_block {
                 lines.push(Line::from(Span::styled(
                     "  ",
-                    Style::default()
-                        .bg(Color::Rgb(25, 25, 25))
-                        .fg(Color::Gray),
+                    Style::default().bg(code_bg).fg(Color::Gray),
                 )));
             }
             in_code_block = !in_code_block;
@@ -155,7 +155,7 @@ fn render_markdown_with_code(content: &str, accent: Color) -> Vec<Line<'static>>
         }
 
         if in_code_block {
-            lines.push(highlight_code_line(line, &lang, accent));
+            lines.push(highlight_code_line(line, &lang, accent, code_bg));
         } else {
             lines.push(Line::from(vec![
                 Span::styled("│ ", Style::default().fg(accent)),
@@ -259,35 +259,57 @@ fn render_tool_call_card(
     args: &str,
     result: &Option<String>,
     status: &ToolStatus,
+    is_light_theme: bool,
 ) -> ListItem<'static> {
     let mut lines = Vec::new();
 
-    // Professional status indicators without background colors
-    let (status_icon, status_fg, card_bg) = match status {
-        ToolStatus::Error => (
-            "✗",
-            Color::Rgb(220, 80, 80),
-            Color::Rgb(26, 26, 28),
-        ),
-        ToolStatus::Success => (
-            "✓",
-            Color::Rgb(100, 180, 120),
-            Color::Rgb(26, 28, 26),
-        ),
-        ToolStatus::Running => (
-            "●",
-            Color::Rgb(200, 160, 80),
-            Color::Rgb(28, 27, 25),
-        ),
+    // Professional status indicators with theme-aware backgrounds
+    let (status_icon, status_fg, card_bg, code_bg) = match status {
+        ToolStatus::Error => {
+            let card = if is_light_theme {
+                Color::Rgb(252, 240, 240)
+            } else {
+                Color::Rgb(26, 26, 28)
+            };
+            let code = if is_light_theme {
+                Color::Rgb(245, 245, 250)
+            } else {
+                Color::Rgb(25, 25, 25)
+            };
+            ("✗", Color::Rgb(220, 80, 80), card, code)
+        }
+        ToolStatus::Success => {
+            let card = if is_light_theme {
+                Color::Rgb(240, 248, 242)
+            } else {
+                Color::Rgb(26, 28, 26)
+            };
+            let code = if is_light_theme {
+                Color::Rgb(245, 245, 250)
+            } else {
+                Color::Rgb(25, 25, 25)
+            };
+            ("✓", Color::Rgb(100, 180, 120), card, code)
+        }
+        ToolStatus::Running => {
+            let card = if is_light_theme {
+                Color::Rgb(252, 248, 240)
+            } else {
+                Color::Rgb(28, 27, 25)
+            };
+            let code = if is_light_theme {
+                Color::Rgb(245, 245, 250)
+            } else {
+                Color::Rgb(25, 25, 25)
+            };
+            ("●", Color::Rgb(200, 160, 80), card, code)
+        }
     };
 
     // Subtle top border
     lines.push(Line::from(vec![
         Span::styled("  ", Style::default()),
-        Span::styled(
-            "─".repeat(100),
-            Style::default().fg(Color::Rgb(50, 50, 55)),
-        ),
+        Span::styled("─".repeat(100), Style::default().fg(Color::Rgb(50, 50, 55))),
     ]));
 
     // Clean header without emojis
@@ -295,9 +317,7 @@ fn render_tool_call_card(
         Span::styled("  ", Style::default()),
         Span::styled(
             format!(" {} ", status_icon),
-            Style::default()
-                .fg(status_fg)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(status_fg).add_modifier(Modifier::BOLD),
         ),
         Span::styled(" ", Style::default()),
         Span::styled(
@@ -316,11 +336,7 @@ fn render_tool_call_card(
     if matches!(status, ToolStatus::Running) && result.is_none() {
         lines.push(Line::from(vec![
             Span::styled("     ", Style::default()),
-            Span::styled(
-                "→ ",
-                Style::default()
-                    .fg(status_fg),
-            ),
+            Span::styled("→ ", Style::default().fg(status_fg)),
             Span::styled(
                 "Executing...",
                 Style::default()
@@ -338,7 +354,7 @@ fn render_tool_call_card(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            
+
             if !path.is_empty() {
                 lines.push(Line::from(vec![
                     Span::styled("     ", Style::default()),
@@ -346,25 +362,15 @@ fn render_tool_call_card(
                         "File: ".to_string(),
                         Style::default().fg(Color::Rgb(110, 110, 130)),
                     ),
-                    Span::styled(
-                        path,
-                        Style::default()
-                            .fg(Color::Rgb(160, 180, 220)),
-                    ),
+                    Span::styled(path, Style::default().fg(Color::Rgb(160, 180, 220))),
                 ]));
 
-                let old_snip = json
-                    .get("oldString")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let new_snip = json
-                    .get("newString")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                
+                let old_snip = json.get("oldString").and_then(|v| v.as_str()).unwrap_or("");
+                let new_snip = json.get("newString").and_then(|v| v.as_str()).unwrap_or("");
+
                 let old_lines = old_snip.lines().count();
                 let new_lines = new_snip.lines().count();
-                
+
                 if old_lines > 0 || new_lines > 0 {
                     lines.push(Line::from(vec![
                         Span::styled("     ", Style::default()),
@@ -374,13 +380,11 @@ fn render_tool_call_card(
                         ),
                         Span::styled(
                             format!("-{} ", old_lines),
-                            Style::default()
-                                .fg(Color::Rgb(200, 100, 100)),
+                            Style::default().fg(Color::Rgb(200, 100, 100)),
                         ),
                         Span::styled(
                             format!("+{} ", new_lines),
-                            Style::default()
-                                .fg(Color::Rgb(100, 180, 120)),
+                            Style::default().fg(Color::Rgb(100, 180, 120)),
                         ),
                         Span::styled(
                             "lines".to_string(),
@@ -404,11 +408,7 @@ fn render_tool_call_card(
                         "Command: ".to_string(),
                         Style::default().fg(Color::Rgb(110, 110, 130)),
                     ),
-                    Span::styled(
-                        preview,
-                        Style::default()
-                            .fg(Color::Rgb(180, 180, 200)),
-                    ),
+                    Span::styled(preview, Style::default().fg(Color::Rgb(180, 180, 200))),
                 ]));
             }
         }
@@ -444,8 +444,7 @@ fn render_tool_call_card(
                     ),
                     Span::styled(
                         format!("\"{}\"", preview),
-                        Style::default()
-                            .fg(Color::Rgb(200, 160, 100)),
+                        Style::default().fg(Color::Rgb(200, 160, 100)),
                     ),
                 ]));
             }
@@ -466,6 +465,207 @@ fn render_tool_call_card(
                 ]));
             }
         }
+    } else if name == "file_manager" {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(args) {
+            // Check if it's a batch operation
+            if let Some(files_array) = json.get("files").and_then(|v| v.as_array()) {
+                lines.push(Line::from(vec![
+                    Span::styled("     ", Style::default()),
+                    Span::styled(
+                        format!("Batch operation: {} file(s)", files_array.len()),
+                        Style::default().fg(Color::Rgb(110, 110, 130)),
+                    ),
+                ]));
+                
+                // Show summary of each file operation
+                for (idx, file_op) in files_array.iter().take(3).enumerate() {
+                    if let Some(path) = file_op.get("path").and_then(|v| v.as_str()) {
+                        let kind = file_op.get("kind").and_then(|v| v.as_str()).unwrap_or("file");
+                        let type_str = if kind == "directory" || kind == "folder" { "dir" } else { "file" };
+                        lines.push(Line::from(vec![
+                            Span::styled("       ", Style::default()),
+                            Span::styled(
+                                format!("{}. ", idx + 1),
+                                Style::default().fg(Color::Rgb(110, 110, 130)),
+                            ),
+                            Span::styled(
+                                format!("[{}] ", type_str),
+                                Style::default().fg(Color::Rgb(140, 140, 160)),
+                            ),
+                            Span::styled(
+                                path.to_string(),
+                                Style::default().fg(Color::Rgb(160, 180, 220)),
+                            ),
+                        ]));
+                    }
+                }
+                if files_array.len() > 3 {
+                    lines.push(Line::from(vec![
+                        Span::styled("       ", Style::default()),
+                        Span::styled(
+                            format!("... and {} more", files_array.len() - 3),
+                            Style::default()
+                                .fg(Color::Rgb(90, 90, 110))
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
+            } else if let Some(path) = json.get("path").and_then(|v| v.as_str()) {
+                // Single file operation
+                let kind = json.get("kind").and_then(|v| v.as_str()).unwrap_or("file");
+                
+                lines.push(Line::from(vec![
+                    Span::styled("     ", Style::default()),
+                    Span::styled(
+                        if kind == "directory" || kind == "folder" {
+                            "Creating directory: "
+                        } else {
+                            "File: "
+                        }.to_string(),
+                        Style::default().fg(Color::Rgb(110, 110, 130)),
+                    ),
+                    Span::styled(
+                        path.to_string(),
+                        Style::default().fg(Color::Rgb(160, 180, 220)),
+                    ),
+                ]));
+
+                // Show line numbers for partial replacement
+                let start_line = json.get("startLine").and_then(|v| v.as_u64());
+                let end_line = json.get("endLine").and_then(|v| v.as_u64());
+                if let (Some(start), Some(end)) = (start_line, end_line) {
+                    lines.push(Line::from(vec![
+                        Span::styled("     ", Style::default()),
+                        Span::styled(
+                            format!("Replacing lines {}-{}", start, end),
+                            Style::default().fg(Color::Rgb(200, 160, 100)),
+                        ),
+                    ]));
+                }
+
+                // Show content preview with syntax highlighting if it's a file
+                if kind == "file" {
+                    if let Some(content) = json.get("content").and_then(|v| {
+                        if v.is_string() {
+                            v.as_str()
+                        } else {
+                            None
+                        }
+                    }) {
+                        if !content.is_empty() {
+                            lines.push(Line::from(Span::raw("")));
+                            
+                            // Detect language from file extension first (for display)
+                            let display_lang = if let Some(ext) = path.rsplit('.').next() {
+                                match ext {
+                                    "rs" => "rust",
+                                    "py" => "python",
+                                    "js" => "javascript",
+                                    "ts" | "tsx" => "typescript",
+                                    "jsx" => "javascript",
+                                    "go" => "go",
+                                    "java" => "java",
+                                    "c" | "h" => "c",
+                                    "cpp" | "cc" | "cxx" | "hpp" => "c++",
+                                    "ml" | "mli" => "ocaml",
+                                    "json" => "json",
+                                    "md" => "markdown",
+                                    "toml" => "toml",
+                                    "yaml" | "yml" => "yaml",
+                                    _ => ext,
+                                }
+                            } else {
+                                "text"
+                            };
+                            
+                            lines.push(Line::from(vec![
+                                Span::styled("     ", Style::default()),
+                                Span::styled(
+                                    "─".repeat(60),
+                                    Style::default().fg(Color::Rgb(60, 60, 80)),
+                                ),
+                            ]));
+                            lines.push(Line::from(vec![
+                                Span::styled("     ", Style::default()),
+                                Span::styled(
+                                    "Content Preview",
+                                    Style::default()
+                                        .fg(Color::Rgb(120, 120, 140))
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::styled(
+                                    format!(" ({})", display_lang),
+                                    Style::default().fg(Color::Rgb(100, 100, 120)),
+                                ),
+                            ]));
+
+                            // Detect language from file extension
+                            let lang = if let Some(ext) = path.rsplit('.').next() {
+                                match ext {
+                                    "rs" => "rust",
+                                    "py" => "python",
+                                    "js" => "javascript",
+                                    "ts" => "typescript",
+                                    "tsx" => "typescript",
+                                    "jsx" => "javascript",
+                                    "go" => "go",
+                                    "java" => "java",
+                                    "c" | "h" => "c",
+                                    "cpp" | "cc" | "cxx" | "hpp" => "cpp",
+                                    "ml" | "mli" => "ocaml",
+                                    _ => "",
+                                }
+                            } else {
+                                ""
+                            };
+
+                            // Show content with syntax highlighting (limited to 15 lines)
+                            let content_lines: Vec<&str> = content.lines().collect();
+                            let display_limit = 15;
+                            let total_lines = content_lines.len();
+                            
+                            for (idx, line) in content_lines.iter().take(display_limit).enumerate() {
+                                let highlighted = highlight_code_line(line, lang, status_fg, code_bg);
+                                // Add line numbers and preserve highlighting
+                                let mut line_spans = vec![
+                                    Span::styled("       ", Style::default()),
+                                    Span::styled(
+                                        format!("{:>3} │ ", idx + 1),
+                                        Style::default().fg(Color::Rgb(70, 70, 90)),
+                                    ),
+                                ];
+                                // Extract spans from highlighted line (skip the first "  " span)
+                                for span in highlighted.spans.into_iter().skip(1) {
+                                    line_spans.push(span);
+                                }
+                                lines.push(Line::from(line_spans));
+                            }
+
+                            if total_lines > display_limit {
+                                lines.push(Line::from(vec![
+                                    Span::styled("           ", Style::default()),
+                                    Span::styled(
+                                        format!("└─ {} more lines", total_lines - display_limit),
+                                        Style::default()
+                                            .fg(Color::Rgb(90, 90, 110))
+                                            .add_modifier(Modifier::ITALIC),
+                                    ),
+                                ]));
+                            }
+                            
+                            // Closing separator
+                            lines.push(Line::from(vec![
+                                Span::styled("     ", Style::default()),
+                                Span::styled(
+                                    "─".repeat(60),
+                                    Style::default().fg(Color::Rgb(60, 60, 80)),
+                                ),
+                            ]));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Result section with professional styling
@@ -474,7 +674,7 @@ fn render_tool_call_card(
 
         if !normalized.is_empty() {
             lines.push(Line::from(Span::raw("")));
-            
+
             // Result header
             lines.push(Line::from(vec![
                 Span::styled("     ", Style::default()),
@@ -486,47 +686,78 @@ fn render_tool_call_card(
                 ),
             ]));
 
-            // Smart result truncation with line count
+            // Smart result truncation with line count and wrapping
             let result_lines: Vec<&str> = normalized.lines().collect();
             let total_lines = result_lines.len();
             let display_limit = 12;
-            let show_lines = result_lines.iter().take(display_limit);
-
-            for (idx, line) in show_lines.enumerate() {
-                let line_content = if line.len() > 95 {
-                    format!("{}…", &line[..94])
+            let max_line_width = 90; // Max characters per line before wrapping
+            
+            let mut displayed_line_count = 0;
+            
+            for (original_idx, line) in result_lines.iter().enumerate() {
+                if displayed_line_count >= display_limit {
+                    break;
+                }
+                
+                // Wrap long lines
+                if line.len() > max_line_width {
+                    let mut remaining = *line;
+                    let mut is_first = true;
+                    
+                    while !remaining.is_empty() && displayed_line_count < display_limit {
+                        let chunk_end = max_line_width.min(remaining.len());
+                        let chunk = &remaining[..chunk_end];
+                        
+                        if !chunk.trim().is_empty() {
+                            lines.push(Line::from(vec![
+                                Span::styled("       ", Style::default()),
+                                Span::styled(
+                                    if is_first {
+                                        format!("{:>3} │ ", original_idx + 1)
+                                    } else {
+                                        "    │ ".to_string()
+                                    },
+                                    Style::default().fg(Color::Rgb(70, 70, 90)),
+                                ),
+                                Span::styled(chunk.to_string(), Style::default().fg(Color::Rgb(180, 180, 200))),
+                            ]));
+                        } else if is_first {
+                            lines.push(Line::from(Span::styled(
+                                "           │",
+                                Style::default().fg(Color::Rgb(70, 70, 90)),
+                            )));
+                        }
+                        
+                        is_first = false;
+                        remaining = &remaining[chunk_end..];
+                        displayed_line_count += 1;
+                    }
                 } else {
-                    line.to_string()
-                };
-
-                // Show line with subtle styling
-                if !line_content.trim().is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("       ", Style::default()),
-                        Span::styled(
-                            format!("{:>3} │ ", idx + 1),
-                            Style::default()
-                                .fg(Color::Rgb(70, 70, 90)),
-                        ),
-                        Span::styled(
-                            line_content,
-                            Style::default()
-                                .fg(Color::Rgb(180, 180, 200)),
-                        ),
-                    ]));
-                } else {
-                    lines.push(Line::from(Span::styled(
-                        "           │",
-                        Style::default().fg(Color::Rgb(70, 70, 90)),
-                    )));
+                    // Short line - display as is
+                    if !line.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::styled("       ", Style::default()),
+                            Span::styled(
+                                format!("{:>3} │ ", original_idx + 1),
+                                Style::default().fg(Color::Rgb(70, 70, 90)),
+                            ),
+                            Span::styled(line.to_string(), Style::default().fg(Color::Rgb(180, 180, 200))),
+                        ]));
+                    } else {
+                        lines.push(Line::from(Span::styled(
+                            "           │",
+                            Style::default().fg(Color::Rgb(70, 70, 90)),
+                        )));
+                    }
+                    displayed_line_count += 1;
                 }
             }
 
-            if total_lines > display_limit {
+            if displayed_line_count >= display_limit && total_lines > display_limit {
                 lines.push(Line::from(vec![
                     Span::styled("           ", Style::default()),
                     Span::styled(
-                        format!("└─ {} more lines omitted", total_lines - display_limit),
+                        format!("└─ {} more lines omitted", total_lines - displayed_line_count),
                         Style::default()
                             .fg(Color::Rgb(90, 90, 110))
                             .add_modifier(Modifier::ITALIC),
@@ -546,19 +777,21 @@ fn render_tool_call_card(
 fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.current_theme();
     let accent = agent_accent(app.selected_agent);
-    
+
     // Theme-aware backgrounds
-    let (user_bg, assistant_bg, thinking_bg) = if theme.name == "Light" {
+    let (user_bg, assistant_bg, thinking_bg, code_bg) = if theme.name == "Light" {
         (
             Color::Rgb(240, 242, 245),
             Color::Rgb(248, 250, 252),
             Color::Rgb(245, 247, 250),
+            Color::Rgb(235, 240, 245), // Light code background
         )
     } else {
         (
             Color::Rgb(28, 28, 32),
             Color::Rgb(20, 24, 28),
             Color::Rgb(24, 24, 30),
+            Color::Rgb(25, 25, 25), // Dark code background
         )
     };
 
@@ -568,10 +801,10 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|msg| match msg {
             ChatMessage::User(content) => {
                 let mut user_lines = Vec::new();
-                
+
                 // Top spacing
                 user_lines.push(Line::from(Span::styled(" ", Style::default().bg(user_bg))));
-                
+
                 // Professional user header
                 user_lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(user_bg)),
@@ -583,7 +816,7 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
-                
+
                 user_lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(user_bg)),
                     Span::styled(
@@ -591,34 +824,32 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(Color::Rgb(50, 50, 60)).bg(user_bg),
                     ),
                 ]));
-                
+
                 // User content with proper wrapping
                 for line in content.lines() {
                     user_lines.push(Line::from(vec![
                         Span::styled("  ", Style::default().bg(user_bg)),
                         Span::styled(
                             line.to_string(),
-                            Style::default()
-                                .fg(Color::Rgb(220, 220, 240))
-                                .bg(user_bg),
+                            Style::default().fg(Color::Rgb(220, 220, 240)).bg(user_bg),
                         ),
                     ]));
                 }
-                
+
                 // Bottom spacing
                 user_lines.push(Line::from(Span::styled(" ", Style::default().bg(user_bg))));
-                
+
                 ListItem::new(user_lines)
             }
             ChatMessage::Assistant(content) => {
                 let mut assistant_lines = Vec::new();
-                
+
                 // Top spacing
                 assistant_lines.push(Line::from(Span::styled(
                     " ",
                     Style::default().bg(assistant_bg),
                 )));
-                
+
                 // Professional assistant header
                 assistant_lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(assistant_bg)),
@@ -630,7 +861,7 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
-                
+
                 assistant_lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(assistant_bg)),
                     Span::styled(
@@ -638,21 +869,21 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(Color::Rgb(45, 48, 52)).bg(assistant_bg),
                     ),
                 ]));
-                
+
                 // Content with markdown and code highlighting
-                let content_lines = render_markdown_with_code(content, accent)
+                let content_lines = render_markdown_with_code(content, accent, code_bg)
                     .into_iter()
                     .map(|ln| ln.patch_style(Style::default().bg(assistant_bg)))
                     .collect::<Vec<_>>();
-                
+
                 assistant_lines.extend(content_lines);
-                
+
                 // Bottom spacing
                 assistant_lines.push(Line::from(Span::styled(
                     " ",
                     Style::default().bg(assistant_bg),
                 )));
-                
+
                 ListItem::new(assistant_lines)
             }
             ChatMessage::ToolCall {
@@ -662,16 +893,16 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                 result,
                 status,
                 ..
-            } => render_tool_call_card(id, name, args, result, status),
+            } => render_tool_call_card(id, name, args, result, status, theme.name == "Light"),
             ChatMessage::Thinking(content) => {
                 let mut lines = Vec::new();
-                
+
                 // Professional thinking header
                 lines.push(Line::from(Span::styled(
                     " ",
                     Style::default().bg(thinking_bg),
                 )));
-                
+
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(thinking_bg)),
                     Span::styled(
@@ -682,17 +913,15 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
-                
+
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(thinking_bg)),
                     Span::styled(
                         "─".repeat(80),
-                        Style::default()
-                            .fg(Color::Rgb(50, 52, 58))
-                            .bg(thinking_bg),
+                        Style::default().fg(Color::Rgb(50, 52, 58)).bg(thinking_bg),
                     ),
                 ]));
-                
+
                 // Thinking content with professional styling
                 for seg in wrap_preserve_lines(content, 95).into_iter() {
                     lines.push(Line::from(vec![
@@ -706,21 +935,21 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                         ),
                     ]));
                 }
-                
+
                 lines.push(Line::from(Span::styled(
                     " ",
                     Style::default().bg(thinking_bg),
                 )));
-                
+
                 ListItem::new(lines)
             }
             ChatMessage::Error(err) => {
                 let error_bg = Color::Rgb(32, 26, 26);
                 let mut lines = Vec::new();
-                
+
                 // Top spacing
                 lines.push(Line::from(Span::styled(" ", Style::default().bg(error_bg))));
-                
+
                 // Professional error header
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(error_bg)),
@@ -732,35 +961,31 @@ fn render_messages(f: &mut Frame, app: &mut App, area: Rect) {
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
-                
+
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default().bg(error_bg)),
                     Span::styled(
                         "─".repeat(80),
-                        Style::default()
-                            .fg(Color::Rgb(60, 45, 45))
-                            .bg(error_bg),
+                        Style::default().fg(Color::Rgb(60, 45, 45)).bg(error_bg),
                     ),
                 ]));
-                
+
                 // Error message
                 for line in err.lines() {
                     lines.push(Line::from(vec![
                         Span::styled("  ", Style::default().bg(error_bg)),
                         Span::styled(
                             line.to_string(),
-                            Style::default()
-                                .fg(Color::Rgb(220, 140, 140))
-                                .bg(error_bg),
+                            Style::default().fg(Color::Rgb(220, 140, 140)).bg(error_bg),
                         ),
                     ]));
                 }
-                
+
                 // Bottom spacing
                 lines.push(Line::from(Span::styled(" ", Style::default().bg(error_bg))));
-                
+
                 ListItem::new(lines)
-            },
+            }
         })
         .collect();
 
@@ -960,28 +1185,24 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
             }
         })
         .unwrap_or_else(|| "None".to_string());
-    
+
     let agent_name = format!("{:?}", app.selected_agent);
-    
-    let loading = if app.loading {
-        "Running"
-    } else {
-        "Idle"
-    };
-    
+
+    let loading = if app.loading { "Running" } else { "Idle" };
+
     let loading_color = if app.loading {
         Color::Rgb(200, 160, 80)
     } else {
         Color::Rgb(100, 180, 120)
     };
-    
+
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(".")
         .to_string();
-    
+
     let status_line = Line::from(vec![
         Span::styled(" ", Style::default()),
         Span::styled(cwd, Style::default().fg(Color::Rgb(140, 140, 160))),
@@ -999,7 +1220,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
     ]);
-    
+
     let status = Paragraph::new(vec![status_line, Line::from("")])
         .style(Style::default().bg(theme.status_bg));
     f.render_widget(status, area);
@@ -1018,10 +1239,8 @@ fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     // Token usage panel
-    let token_block = Block::default()
-        .borders(Borders::ALL)
-        .title("Token Usage");
-    
+    let token_block = Block::default().borders(Borders::ALL).title("Token Usage");
+
     let mut token_lines: Vec<Line> = Vec::new();
     if let Some((prompt, completion, total)) = app.last_token_usage {
         let pct = if MAX_TOKENS > 0 {
@@ -1029,23 +1248,32 @@ fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
         } else {
             0.0
         };
-        
+
         token_lines.push(Line::from(vec![
-            Span::styled("Prompt:     ", Style::default().fg(Color::Rgb(120, 120, 140))),
+            Span::styled(
+                "Prompt:     ",
+                Style::default().fg(Color::Rgb(120, 120, 140)),
+            ),
             Span::styled(
                 format!("{}", prompt),
                 Style::default().fg(Color::Rgb(180, 180, 200)),
             ),
         ]));
         token_lines.push(Line::from(vec![
-            Span::styled("Completion: ", Style::default().fg(Color::Rgb(120, 120, 140))),
+            Span::styled(
+                "Completion: ",
+                Style::default().fg(Color::Rgb(120, 120, 140)),
+            ),
             Span::styled(
                 format!("{}", completion),
                 Style::default().fg(Color::Rgb(180, 180, 200)),
             ),
         ]));
         token_lines.push(Line::from(vec![
-            Span::styled("Total:      ", Style::default().fg(Color::Rgb(120, 120, 140))),
+            Span::styled(
+                "Total:      ",
+                Style::default().fg(Color::Rgb(120, 120, 140)),
+            ),
             Span::styled(
                 format!("{} ({:.1}%)", total, pct),
                 Style::default()
@@ -1059,7 +1287,7 @@ fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::Rgb(100, 100, 120)),
         )));
     }
-    
+
     let token_para = Paragraph::new(token_lines).block(token_block);
     f.render_widget(token_para, vertical[0]);
 
@@ -1072,20 +1300,18 @@ fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
                 .next()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| file_path.clone());
-            
+
             // Truncate long filenames
             let display_name = if file_name.len() > 18 {
                 format!("{}…", &file_name[..17])
             } else {
                 file_name
             };
-            
-            file_items.push(Line::from(vec![
-                Span::styled(
-                    display_name,
-                    Style::default().fg(Color::Rgb(180, 180, 200)),
-                ),
-            ]));
+
+            file_items.push(Line::from(vec![Span::styled(
+                display_name,
+                Style::default().fg(Color::Rgb(180, 180, 200)),
+            )]));
         }
 
         let file_block = Block::default()
@@ -1097,28 +1323,27 @@ fn render_chat_sidebar(f: &mut Frame, app: &App, area: Rect) {
         let empty_block = Block::default()
             .borders(Borders::ALL)
             .title("Modified Files");
-        let empty = Paragraph::new("No changes yet")
-            .style(Style::default().fg(Color::Rgb(100, 100, 120)));
+        let empty =
+            Paragraph::new("No changes yet").style(Style::default().fg(Color::Rgb(100, 100, 120)));
         f.render_widget(empty.block(empty_block), vertical[1]);
     }
 
     // Session info panel
-    let session_block = Block::default()
-        .borders(Borders::ALL)
-        .title("Session");
+    let session_block = Block::default().borders(Borders::ALL).title("Session");
     let mut context_lines: Vec<Line> = Vec::new();
-    
-    let session_name = app.sessions
+
+    let session_name = app
+        .sessions
         .get(app.current_session)
         .cloned()
         .unwrap_or_else(|| "New".to_string());
-    
+
     let truncated_session = if session_name.len() > 18 {
         format!("{}…", &session_name[..17])
     } else {
         session_name
     };
-    
+
     context_lines.push(Line::from(vec![
         Span::styled("Name: ", Style::default().fg(Color::Rgb(120, 120, 140))),
         Span::styled(
@@ -1645,7 +1870,7 @@ fn render_help(f: &mut Frame, _app: &App, area: Rect) {
     let rect = centered_rect(60, 60, area);
     f.render_widget(Clear, rect);
     let block = Block::default().borders(Borders::ALL).title("Help");
-    let text = "Available Commands:\n\n/models - Select Model\n/agents - Select Agent\n/settings - Configure API key / model / base URL\n/baseurl - Select provider base URL (Mistral, DeepSeek, OpenRouter, etc.)\n/help - Show this help screen\n/clear - Clear conversation and reset agent\n\nNavigation:\nUse Arrows to navigate lists.\nTab to switch between fields/agents.\nEnter to select.\nEsc to go back.\n\nTip: Type '/' in the input to see all available commands with autocomplete.";
+    let text = "Available Commands:\n\n/models - Select Model\n/agents - Select Agent\n/settings - Configure API key / model / base URL\n/baseurl - Select provider base URL (Mistral, DeepSeek, OpenRouter, etc.)\n/help - Show this help screen\n/clear - Clear conversation and reset agent\n/sandbox - Enable sandbox mode (auto-commit every run; merge with /save)\n/save - Merge sandbox branch back to the base branch and switch back\n\nNavigation:\nUse Arrows to navigate lists.\nTab to switch between fields/agents.\nEnter to select.\nEsc to go back.\n\nTip: Type '/' in the input to see all available commands with autocomplete.";
     let p = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
     f.render_widget(p, rect);
 }

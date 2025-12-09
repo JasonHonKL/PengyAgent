@@ -99,11 +99,9 @@ pub mod find_replace {
             let content = fs::read_to_string(path)?;
             let occurrences: Vec<_> = content.match_indices(search_content).collect();
             if occurrences.is_empty() {
-                return Err(format!(
-                    "No matches for searchContent were found in {}",
-                    file_path
-                )
-                .into());
+                return Err(
+                    format!("No matches for searchContent were found in {}", file_path).into(),
+                );
             }
 
             let replaced = content.replace(search_content, replace_content);
@@ -198,4 +196,3 @@ pub mod find_replace {
         }
     }
 }
-

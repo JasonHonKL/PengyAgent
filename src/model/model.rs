@@ -287,11 +287,11 @@ pub mod model {
             }
         }
 
-    pub async fn complete(
-        &self,
-        mut messages: Vec<Message>,
-        tools: Option<&[Box<dyn tool::ToolCall>]>,
-    ) -> Result<(Vec<Message>, Option<ResponseUsage>), Box<dyn Error + Send + Sync>> {
+        pub async fn complete(
+            &self,
+            mut messages: Vec<Message>,
+            tools: Option<&[Box<dyn tool::ToolCall>]>,
+        ) -> Result<(Vec<Message>, Option<ResponseUsage>), Box<dyn Error + Send + Sync>> {
             // Retry logic: try up to 3 times for connection errors
             const MAX_RETRIES: u32 = 3;
             let mut retry_count = 0;
@@ -307,6 +307,7 @@ pub mod model {
                     model: self.model_name.clone(),
                     messages: outbound_messages,
                     tools: None,
+                    stream: None,
                 };
 
                 if let Some(ref tools_vec) = tools {
@@ -533,6 +534,55 @@ pub mod model {
             } // end of retry loop
         }
 
+        /// Starts a streaming chat completion request. The caller is responsible
+        /// for consuming the returned `reqwest::Response` via `bytes_stream` or
+        /// similar utilities.
+        pub async fn complete_streaming(
+            &self,
+            mut messages: Vec<Message>,
+            tools: Option<&[Box<dyn tool::ToolCall>]>,
+        ) -> Result<reqwest::Response, Box<dyn Error + Send + Sync>> {
+            let client = reqwest::Client::new();
+            let mut req_builder = client.request(reqwest::Method::POST, self.completion_url());
+
+            self.ensure_reasoning_messages(&mut messages);
+
+            let mut body = RequestBody {
+                model: self.model_name.clone(),
+                messages,
+                tools: None,
+                stream: Some(true),
+            };
+
+            if let Some(ref tools_vec) = tools {
+                body.tools = Some(convert_tools(tools_vec)?);
+            }
+
+            let json_body = serde_json::to_vec(&body)
+                .map_err(|e| format!("Failed to serialize request: {}", e))?;
+
+            req_builder = req_builder
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Accept", "text/event-stream")
+                .body(json_body);
+
+            let response = req_builder.send().await?;
+            let status = response.status();
+
+            if !status.is_success() {
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(
+                    format!("API request failed with status {}: {}", status, error_text).into(),
+                );
+            }
+
+            Ok(response)
+        }
+
         /// Vision completion API that takes an image and messages
         /// image_url can be either a direct URL or a base64-encoded data URL (e.g., "data:image/jpeg;base64,...")
         pub async fn open_router_vision_completion(
@@ -727,6 +777,8 @@ pub mod model {
         messages: Vec<Message>,
         #[serde(skip_serializing_if = "Option::is_none")]
         tools: Option<Vec<serde_json::Value>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stream: Option<bool>,
     }
 
     #[derive(Serialize)]
@@ -868,6 +920,7 @@ pub mod model {
                 model: model.model_name.clone(),
                 messages: messages.clone(),
                 tools: None,
+                stream: None,
             };
 
             if let Some(ref tools_vec) = tools {
@@ -984,6 +1037,7 @@ pub mod model {
                 model: "gpt-4".to_string(),
                 messages,
                 tools: None,
+                stream: None,
             };
 
             let json = serde_json::to_string(&body).unwrap();
@@ -1020,6 +1074,7 @@ pub mod model {
                 model: "gpt-4".to_string(),
                 messages,
                 tools: Some(vec![tool_json]),
+                stream: None,
             };
 
             let json = serde_json::to_string(&body).unwrap();

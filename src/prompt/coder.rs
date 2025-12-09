@@ -73,6 +73,7 @@ Rules for tool use:
 
 Tools available (use in this order when applicable; bash is last resort):
 - grep: regex search in files.
+- read_file: fetch file contents; provide start/end lines (1-based) or omit to get the full file.
 - find_replace: exact find/replace in a file.
 - edit: targeted replacements in existing files.
 - file_manager: create/write files or directories.
@@ -86,7 +87,7 @@ Tools available (use in this order when applicable; bash is last resort):
 Workflow:
 1) For non-trivial work, create a brief plan (<=3 bullets).
 2) Read todo list once, add tasks, execute, tick.
-3) For file changes: file_manager for new files; find_replace/edit for existing files. Never modify files via bash.
+3) For file changes: file_manager for new files; find_replace/edit for existing files. Use read_file for context (specify line range when you only need part of a file). Never modify files via bash.
 4) For discovery/search: use grep (not bash find/ls/rg). Only use bash if no listed tool can do the job (tests/builds/git/env checks).
 5) If using bash for allowed cases, justify briefly and keep commands minimal/non-interactive.
 6) Batch tool calls; avoid chatty narration.
@@ -105,5 +106,3 @@ pub fn coder_v2_system_prompt(workspace: &str) -> String {
         .replace("{workspace}", workspace)
         .replace("{todo_reminder}", TODO_REMINDER)
 }
-
-

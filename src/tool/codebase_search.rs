@@ -29,7 +29,8 @@ pub mod codebase_search {
                 "query".to_string(),
                 Parameter {
                     items: query_items,
-                    description: "Search query string (case-insensitive substring match).".to_string(),
+                    description: "Search query string (case-insensitive substring match)."
+                        .to_string(),
                     enum_values: None,
                 },
             );
@@ -40,7 +41,9 @@ pub mod codebase_search {
                 "root".to_string(),
                 Parameter {
                     items: root_items,
-                    description: "Optional root directory to search (default: current working directory).".to_string(),
+                    description:
+                        "Optional root directory to search (default: current working directory)."
+                            .to_string(),
                     enum_values: None,
                 },
             );
@@ -106,12 +109,7 @@ pub mod codebase_search {
 
             for (idx, line) in content.lines().enumerate() {
                 if line.to_lowercase().contains(query_lower) {
-                    let display = format!(
-                        "{}:{}: {}",
-                        path.display(),
-                        idx + 1,
-                        line.trim_end()
-                    );
+                    let display = format!("{}:{}: {}", path.display(), idx + 1, line.trim_end());
                     results.push(display);
                     if results.len() >= max_results {
                         break;
@@ -167,10 +165,7 @@ pub mod codebase_search {
                 .get("query")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: query")?;
-            let root = args
-                .get("root")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let root = args.get("root").and_then(|v| v.as_str()).unwrap_or(".");
             let max_results = args
                 .get("maxResults")
                 .and_then(|v| v.as_u64())
@@ -187,7 +182,10 @@ pub mod codebase_search {
             Self::walk(root_path, &query.to_lowercase(), max_results, &mut results)?;
 
             if results.is_empty() {
-                Ok(format!("No matches found for '{}'. Searched up to {} results.", query, max_results))
+                Ok(format!(
+                    "No matches found for '{}'. Searched up to {} results.",
+                    query, max_results
+                ))
             } else {
                 Ok(results.join("\n"))
             }
@@ -198,4 +196,3 @@ pub mod codebase_search {
         }
     }
 }
-

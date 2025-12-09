@@ -13,7 +13,9 @@ pub mod edit_file {
 
     impl EditFileTool {
         pub fn new() -> Self {
-            Self { inner: EditTool::new() }
+            Self {
+                inner: EditTool::new(),
+            }
         }
     }
 
@@ -42,4 +44,3 @@ pub mod edit_file {
         }
     }
 }
-

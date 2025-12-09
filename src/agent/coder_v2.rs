@@ -9,6 +9,7 @@ pub mod coder_v2 {
     use crate::tool::file_manager::file_manager::FileManagerTool;
     use crate::tool::find_replace::find_replace::FindReplaceTool;
     use crate::tool::grep::grep::GrepTool;
+    use crate::tool::read_file::read_file::ReadFileTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
     use crate::tool::todo::todo::TodoTool;
     use crate::tool::tool::tool::ToolCall;
@@ -16,7 +17,7 @@ pub mod coder_v2 {
 
     /// Create a coder agent using the tools listed in the coder prompt.
     /// Tool order mirrors the prompt guidance:
-    /// grep -> find_replace -> edit -> file_manager -> docs_researcher -> todo
+    /// grep -> read_file -> find_replace -> edit -> file_manager -> docs_researcher -> todo
     /// -> web -> bash -> summarizer -> end.
     pub fn create_coder_v2_agent(
         model: Model,
@@ -26,6 +27,7 @@ pub mod coder_v2 {
     ) -> Agent {
         // Instantiate tools
         let grep_tool = GrepTool::new();
+        let read_file_tool = ReadFileTool::new();
         let find_replace_tool = FindReplaceTool::new();
         let edit_tool = EditTool::new();
         let file_manager_tool = FileManagerTool::new();
@@ -38,6 +40,7 @@ pub mod coder_v2 {
 
         let tools: Vec<Box<dyn ToolCall>> = vec![
             Box::new(grep_tool),
+            Box::new(read_file_tool),
             Box::new(find_replace_tool),
             Box::new(edit_tool),
             Box::new(file_manager_tool),
@@ -60,4 +63,3 @@ pub mod coder_v2 {
         Agent::new(model, tools, final_system_prompt, max_retry, max_step)
     }
 }
-

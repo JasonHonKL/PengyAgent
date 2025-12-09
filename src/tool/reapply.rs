@@ -16,7 +16,9 @@ pub mod reapply {
             let parameters = HashMap::new();
             let tool = Tool {
                 name: "reapply".to_string(),
-                description: "Reapply the last edit (not supported in this runtime; returns a message).".to_string(),
+                description:
+                    "Reapply the last edit (not supported in this runtime; returns a message)."
+                        .to_string(),
                 parameters,
                 required: vec![],
             };
@@ -38,4 +40,3 @@ pub mod reapply {
         }
     }
 }
-

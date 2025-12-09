@@ -1,11 +1,11 @@
 use crate::app::App;
 use crate::theme::THEMES;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Span,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
-    Frame,
 };
 
 pub fn render_theme_selector(f: &mut Frame, app: &mut App, area: Rect) {
@@ -29,9 +29,9 @@ pub fn render_theme_selector(f: &mut Frame, app: &mut App, area: Rect) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Search
-            Constraint::Min(10),    // List
-            Constraint::Length(1),  // Hint
+            Constraint::Length(3), // Search
+            Constraint::Min(10),   // List
+            Constraint::Length(1), // Hint
         ])
         .split(inner);
 
@@ -82,7 +82,8 @@ pub fn render_theme_selector(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         if let Some(sel) = app.theme_list_state.selected() {
             if sel >= filtered.len() {
-                app.theme_list_state.select(Some(filtered.len().saturating_sub(1)));
+                app.theme_list_state
+                    .select(Some(filtered.len().saturating_sub(1)));
             }
         } else {
             app.theme_list_state.select(Some(0));
@@ -90,12 +91,7 @@ pub fn render_theme_selector(f: &mut Frame, app: &mut App, area: Rect) {
 
         let items: Vec<ListItem> = filtered
             .iter()
-            .map(|(_, name)| {
-                ListItem::new(Span::styled(
-                    *name,
-                    Style::default().fg(Color::White),
-                ))
-            })
+            .map(|(_, name)| ListItem::new(Span::styled(*name, Style::default().fg(Color::White))))
             .collect();
 
         let list = List::new(items)
@@ -112,5 +108,3 @@ pub fn render_theme_selector(f: &mut Frame, app: &mut App, area: Rect) {
         .style(Style::default().fg(Color::Gray));
     f.render_widget(hint, layout[2]);
 }
-
-

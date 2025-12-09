@@ -53,7 +53,8 @@ pub mod list_dir {
 
             let tool = Tool {
                 name: "list_dir".to_string(),
-                description: "List directory contents with optional hidden filtering and limits.".to_string(),
+                description: "List directory contents with optional hidden filtering and limits."
+                    .to_string(),
                 parameters,
                 required: vec!["target_directory".to_string()],
             };
@@ -123,4 +124,3 @@ pub mod list_dir {
         }
     }
 }
-

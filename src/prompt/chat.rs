@@ -23,5 +23,3 @@ pub fn chat_system_prompt(workspace: &str) -> String {
         .replace("{workspace}", workspace)
         .replace("{todo_reminder}", TODO_REMINDER)
 }
-
-

@@ -5,18 +5,34 @@ pub mod agent {
 
     #[derive(Clone, Debug)]
     pub enum AgentEvent {
-        Step { step: u32, max_steps: u32 },
-        ToolCall { tool_name: String, args: String },
-        ToolResult { result: String },
+        Step {
+            step: u32,
+            max_steps: u32,
+        },
+        ToolCall {
+            tool_name: String,
+            args: String,
+        },
+        ToolResult {
+            result: String,
+        },
         TokenUsage {
             prompt_tokens: Option<u32>,
             completion_tokens: Option<u32>,
             total_tokens: Option<u32>,
         },
-        Thinking { content: String },
-        FinalResponse { content: String },
-        Error { error: String },
-        VisionAnalysis { status: String },
+        Thinking {
+            content: String,
+        },
+        FinalResponse {
+            content: String,
+        },
+        Error {
+            error: String,
+        },
+        VisionAnalysis {
+            status: String,
+        },
     }
 
     pub struct Agent {
