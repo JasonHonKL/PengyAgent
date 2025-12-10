@@ -1,3 +1,5 @@
 /target
 .pengy_config.json
 /pengy_sessions
+.DS_Store
+

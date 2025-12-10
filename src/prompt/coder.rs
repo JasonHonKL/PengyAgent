@@ -82,6 +82,7 @@ Tools available (exact names—call these, no aliases; bash is last resort):
 - web
 - bash
 - summarizer
+- think: Use this tool to think about something. It will not obtain new information or change the database, but just append the thought to the log. Use it when complex reasoning or some cache memory is needed.
 - end
 If a tool you need is missing, say so instead of guessing a different name.
 

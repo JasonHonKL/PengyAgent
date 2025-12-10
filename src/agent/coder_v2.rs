@@ -11,6 +11,7 @@ pub mod coder_v2 {
     use crate::tool::grep::grep::GrepTool;
     use crate::tool::read_file::read_file::ReadFileTool;
     use crate::tool::summarizer::summarizer::SummarizerTool;
+    use crate::tool::think::think::ThinkTool;
     use crate::tool::todo::todo::TodoTool;
     use crate::tool::tool::tool::ToolCall;
     use crate::tool::web::web::WebTool;
@@ -18,7 +19,7 @@ pub mod coder_v2 {
     /// Create a coder agent using the tools listed in the coder prompt.
     /// Tool order mirrors the prompt guidance:
     /// grep -> read_file -> find_replace -> edit -> file_manager -> docs_researcher -> todo
-    /// -> web -> bash -> summarizer -> end.
+    /// -> web -> bash -> summarizer -> think -> end.
     pub fn create_coder_v2_agent(
         model: Model,
         system_prompt: Option<String>,
@@ -36,6 +37,7 @@ pub mod coder_v2 {
         let web_tool = WebTool::new();
         let bash_tool = BashTool::new();
         let summarizer_tool = SummarizerTool::new();
+        let think_tool = ThinkTool::new();
         let end_tool = EndTool::new();
 
         let tools: Vec<Box<dyn ToolCall>> = vec![
@@ -49,6 +51,7 @@ pub mod coder_v2 {
             Box::new(web_tool),
             Box::new(bash_tool),
             Box::new(summarizer_tool),
+            Box::new(think_tool),
             Box::new(end_tool),
         ];
 
